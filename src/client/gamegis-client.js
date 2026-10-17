@@ -54,6 +54,61 @@ async function gunzip(bytes) {
 const joinUrl = (base, path) => base.replace(/\/?$/, '/') + path.replace(/^\//, '');
 
 /**
+ * Converts tile feature groups to classic OSM JSON elements (Map API style): nodes with lat/lon and
+ * ways that reference node ids — for applications whose algorithms already consume that format.
+ * - Real OSM ids are kept for nodes and ways; relation parts and generated vertices get negative ids.
+ * - Polygon: the outer ring becomes a closed way; holes are emitted only with holes: 'separate'
+ *   (as ways tagged {"gamegis:hole_of": "<sourceType>/<sourceId>"}), otherwise dropped (conservative).
+ * - MultiPolygon / MultiLineString: one way per part with the same tags.
+ * - bbox {south, west, north, east}: keep only features whose bounds intersect it.
+ * Each OSM element appears once even if it belongs to several groups.
+ */
+export function toOsmElements(data, {bbox = null, holes = 'drop'} = {}) {
+  let nextId = -1;
+  const elements = [];
+  const emitted = new Set();
+  const nodeFor = ([lon, lat]) => { const id = nextId--; elements.push({type: 'node', id, lat, lon}); return id; };
+  const wayFrom = (id, coords, tags) => {
+    const closed = coords.length > 3 && coords[0][0] === coords.at(-1)[0] && coords[0][1] === coords.at(-1)[1];
+    const refs = (closed ? coords.slice(0, -1) : coords).map(nodeFor);
+    if (closed) refs.push(refs[0]); // closed ring references its first node again, as in OSM
+    elements.push({type: 'way', id, nodes: refs, tags: {...tags}});
+  };
+  const bounds = g => {
+    const pts = g.type === 'Point' ? [g.coordinates] : g.type === 'LineString' ? g.coordinates
+      : g.type === 'MultiPolygon' ? g.coordinates.flat(2) : g.coordinates.flat();
+    let w = Infinity, e = -Infinity, s = Infinity, n = -Infinity;
+    for (const [lon, lat] of pts) { if (lon < w) w = lon; if (lon > e) e = lon; if (lat < s) s = lat; if (lat > n) n = lat; }
+    return {west: w, east: e, south: s, north: n};
+  };
+  for (const g of GROUP_NAMES) for (const f of data?.[g] ?? []) {
+    const {sourceType, sourceId, tags} = f.properties;
+    const key = `${sourceType}/${sourceId}`;
+    if (emitted.has(key)) continue;
+    const geom = f.geometry;
+    if (bbox) {
+      const b = bounds(geom);
+      if (b.west > bbox.east || b.east < bbox.west || b.south > bbox.north || b.north < bbox.south) continue;
+    }
+    emitted.add(key);
+    if (geom.type === 'Point') {
+      elements.push({type: 'node', id: sourceType === 'node' ? sourceId : nextId--, lat: geom.coordinates[1], lon: geom.coordinates[0], tags: {...tags}});
+    } else if (geom.type === 'LineString') {
+      wayFrom(sourceType === 'way' ? sourceId : nextId--, geom.coordinates, tags);
+    } else if (geom.type === 'Polygon' || geom.type === 'MultiPolygon') {
+      const polys = geom.type === 'Polygon' ? [geom.coordinates] : geom.coordinates;
+      polys.forEach((rings, i) => {
+        wayFrom(sourceType === 'way' && polys.length === 1 ? sourceId : nextId--, rings[0], tags);
+        if (holes === 'separate') for (const hole of rings.slice(1)) wayFrom(nextId--, hole, {'gamegis:hole_of': key});
+      });
+    } else if (geom.type === 'MultiLineString') {
+      for (const line of geom.coordinates) wayFrom(nextId--, line, tags);
+    }
+  }
+  return elements;
+}
+
+/**
  * options:
  *   mirrors: base URLs in priority order (required, at least one)
  *   fetchImpl: custom fetch (tests); timeoutMs: per request (default 15000)
