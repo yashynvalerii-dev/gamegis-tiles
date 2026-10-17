@@ -8,13 +8,31 @@
  * result.diagnostics.complete=false; future coverage MUST NOT mark such tiles READY.
  */
 import { assertPosition, pointInPolygon } from './geometry.js';
-import { classifyWayTags, isEntranceTags, requiresRelationSupport } from './classifier.js';
+import { classifyWayTags, isEntranceTags, isPowerPointTags, requiresRelationSupport } from './classifier.js';
 
-export const DATASET_ID = 'OSM_MVP_BASE_V1';
-export const NORMALIZATION_VERSION = 'OSM_NORMALIZER_V2'; // V2: multipolygon relations assembled
+export const DATASET_ID = 'OSM_MVP_BASE_V1'; // layer set is identified by NORMALIZATION_VERSION (V3 adds POWER)
+export const NORMALIZATION_VERSION = 'OSM_NORMALIZER_V3'; // V2: multipolygons; V3: power layer + tag allowlist
 export const PROCESSED_LAYERS = Object.freeze([
-  'WALKABLE', 'BUILDINGS', 'ENTRANCES', 'WATER', 'RAILWAYS',
+  'WALKABLE', 'BUILDINGS', 'ENTRANCES', 'WATER', 'RAILWAYS', 'POWER',
 ]);
+
+/**
+ * Only geography/accessibility tags are published; metadata (addresses, sources, notes, contacts,
+ * wiki links, translations) is dropped to keep tiles small. Classification always uses the full tags.
+ */
+export const PUBLISHED_TAG_KEYS = Object.freeze(new Set([
+  'name', 'ref', 'type', 'area', 'layer', 'level', 'tunnel', 'bridge', 'covered', 'indoor', 'location',
+  'highway', 'footway', 'sidewalk', 'surface', 'smoothness', 'tracktype', 'lit', 'wheelchair', 'service',
+  'access', 'foot', 'bicycle', 'motor_vehicle', 'barrier',
+  'entrance', 'door', 'building', 'building:levels',
+  'natural', 'water', 'waterway', 'intermittent', 'landuse', 'military',
+  'railway', 'usage', 'electrified', 'power', 'voltage', 'line', 'cables',
+]));
+function publishedTags(tags) {
+  const out = {};
+  for (const [k, v] of Object.entries(tags)) if (PUBLISHED_TAG_KEYS.has(k)) out[k] = v;
+  return out;
+}
 
 const LAYER_FOR_CLASS = Object.freeze({
   walkable: 'walkableWays',
@@ -22,6 +40,7 @@ const LAYER_FOR_CLASS = Object.freeze({
   entrance: 'entrances',
   water: 'water',
   railway: 'railways',
+  power: 'power',
   restricted_area: 'restrictedAreas',
   restricted_way: 'restrictedWays',
 });
@@ -243,7 +262,7 @@ export function normalizeOsmMvpBase(payload, { provider } = {}) {
   }
 
   const layers = {
-    walkableWays: [], buildings: [], entrances: [], water: [], railways: [],
+    walkableWays: [], buildings: [], entrances: [], water: [], railways: [], power: [],
     restrictedAreas: [], restrictedWays: [],
   };
   const features = [];
@@ -255,7 +274,7 @@ export function normalizeOsmMvpBase(payload, { provider } = {}) {
       featureClass,
       geometry,
       bbox: boundsFor(geometry),
-      tags: safeTags(tags),
+      tags: publishedTags(safeTags(tags)),
       normalizationVersion: NORMALIZATION_VERSION,
     };
     features.push(feature);
@@ -263,9 +282,12 @@ export function normalizeOsmMvpBase(payload, { provider } = {}) {
   };
 
   for (const el of nodeElements) {
-    if (!isEntranceTags(el.tags)) continue;
+    const pointClasses = [];
+    if (isEntranceTags(el.tags)) pointClasses.push('entrance');
+    if (isPowerPointTags(el.tags)) pointClasses.push('power');
+    if (!pointClasses.length) continue;
     const pos = nodes.get(el.id);
-    if (pos) makeFeature('node', el.id, 'entrance', { type: 'Point', coordinates: [...pos] }, el.tags);
+    if (pos) for (const cls of pointClasses) makeFeature('node', el.id, cls, { type: 'Point', coordinates: [...pos] }, el.tags);
     // Invalid nodes were already flagged as errors, never silently considered empty.
   }
 

@@ -41,7 +41,7 @@ export function runExport(o, {log = console.log} = {}) {
   const report = {...stats, loadStats: model.stats, totalSeconds: (Date.now() - t0) / 1000,
     maxRssMB: Math.round(process.resourceUsage().maxRSS / 1024), outDir: o.outDir, bundleZoom: o.bundleZoom};
   log(`Export done in ${report.totalSeconds.toFixed(1)} s, peak memory ${report.maxRssMB} MB`);
-  log(`Files: ${stats.files} (bundles ${stats.bundles}); size ${mb(stats.bytes)} raw, ${mb(stats.gzipBytes)} gzip; ` +
+  log(`Files: ${stats.files} (bundles ${stats.bundles}); stored ${mb(stats.storedBytes)}; content ${mb(stats.bytes)} raw / ${mb(stats.gzipBytes)} gzip; ` +
     `largest bundle ${mb(stats.maxBundleBytes)} raw / ${mb(stats.maxBundleGzipBytes)} gzip; manifest ${mb(stats.manifestBytes)}`);
   log(`Tiles: READY ${stats.tiles.READY}, INCOMPLETE ${stats.tiles.INCOMPLETE} ${JSON.stringify(stats.incompleteReasons)}; features ${stats.features}`);
   writeFileSync(join(o.outDir, 'export-report.json'), JSON.stringify(report, null, 2));

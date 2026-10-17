@@ -6,7 +6,8 @@
  * normalizeOsmMvpBase; a tile is READY only if normalization is complete AND its buffered scope lies
  * fully inside the extract boundary. Features are published only for READY tiles.
  *
- * Output: <outDir>/bundles/<z>/<x>/<y>.json (one file per z13 bundle = 4x4 z15 tiles) + manifest.json.
+ * Output: <outDir>/bundles/<z>/<x>/<y>.json.gz (gzip; one file per z13 bundle = 4x4 z15 tiles) + manifest.json.
+ * Clients decompress with DecompressionStream('gzip'); the manifest sha256 covers the stored .gz bytes.
  *
  * Memory: passes over the PBF keep only relevant ways (+ multipolygon member ways), their node refs
  * and coordinates in typed arrays; bundles are built one at a time.
@@ -18,16 +19,17 @@ import {gzipSync} from 'node:zlib';
 import {scanPbf} from '../providers/pbfReader.js';
 import {buildOverpassQuery} from '../providers/overpassProvider.js';
 import {segmentIntersectsBox} from '../gis/bbox.js';
-import {classifyWayTags, isEntranceTags, requiresRelationSupport} from '../gis/classifier.js';
+import {classifyWayTags, isPointFeatureTags, requiresRelationSupport} from '../gis/classifier.js';
 import {normalizeOsmMvpBase, DATASET_ID, NORMALIZATION_VERSION} from '../gis/normalizer.js';
 import {tileForPoint, boundsForTile, tileId, bboxContainsBbox} from '../core/tileGrid.js';
 
-export const BUNDLE_FORMAT = 'GAMEGIS_TILE_BUNDLE_V1';
-export const MANIFEST_FORMAT = 'GAMEGIS_TILE_MANIFEST_V1';
+export const BUNDLE_FORMAT = 'GAMEGIS_TILE_BUNDLE_V2'; // V2: power group, published tag allowlist
+export const MANIFEST_FORMAT = 'GAMEGIS_TILE_MANIFEST_V2'; // V2: gzip-stored bundles
+export const BUNDLE_PATH_TEMPLATE = 'bundles/{z}/{x}/{y}.json.gz';
 export const TILE_ZOOM = 15;
 const GROUPS = {walkable: 'walkableWays', building: 'buildings', entrance: 'entrances', water: 'water',
-  railway: 'railways', restricted_area: 'restrictedAreas', restricted_way: 'restrictedWays'};
-const emptyGroups = () => ({walkableWays: [], buildings: [], entrances: [], water: [], railways: [], restrictedAreas: [], restrictedWays: []});
+  railway: 'railways', power: 'power', restricted_area: 'restrictedAreas', restricted_way: 'restrictedWays'};
+const emptyGroups = () => ({walkableWays: [], buildings: [], entrances: [], water: [], railways: [], power: [], restrictedAreas: [], restrictedWays: []});
 
 const isRelevantWay = tags => classifyWayTags(tags).length > 0;
 const isRelevantRelation = tags => requiresRelationSupport(tags) || classifyWayTags(tags).length > 0;
@@ -89,7 +91,7 @@ export function loadRegionModel(pbfPath, {onProgress = () => {}} = {}) {
     node(id, la, lo, tags) {
       const i = lowerBound(needed, id);
       if (i < needed.length && needed[i] === id) { lat[i] = la; lon[i] = lo; }
-      if (isEntranceTags(tags)) entrances.push({id, lat: la, lon: lo, tags});
+      if (isPointFeatureTags(tags)) entrances.push({id, lat: la, lon: lo, tags});
     },
   });
 
@@ -211,6 +213,7 @@ export function exportRegion({model, outDir, boundary, bundleZoom = 13, bufferM 
   const empty = {ways: [], relations: [], entrances: []};
   const manifest = {format: MANIFEST_FORMAT, datasetId: DATASET_ID, normalizationVersion: NORMALIZATION_VERSION,
     provider: 'GEOFABRIK_EXTRACT', dataTimestamp, generatedAt, tileZoom: TILE_ZOOM, bundleZoom, bufferM,
+    bundlePath: BUNDLE_PATH_TEMPLATE, bundleEncoding: 'gzip',
     license: 'ODbL 1.0 — © OpenStreetMap contributors', bundles: {}};
   const stats = {bundles: 0, files: 0, bytes: 0, gzipBytes: 0, maxBundleBytes: 0, maxBundleGzipBytes: 0,
     tiles: {READY: 0, INCOMPLETE: 0}, incompleteReasons: {}, features: 0};
@@ -257,14 +260,16 @@ export function exportRegion({model, outDir, boundary, bundleZoom = 13, bufferM 
         normalizationVersion: NORMALIZATION_VERSION, provider: 'GEOFABRIK_EXTRACT', dataTimestamp,
         license: manifest.license, tiles: tilesOut, data: groups});
       const bytes = Buffer.from(body, 'utf8');
-      const gz = gzipSync(bytes, {level: 6}).length;
+      const stored = gzipSync(bytes, {level: 9});
+      const gz = stored.length;
       const dir = join(outDir, 'bundles', String(bundleZoom), String(bx));
       mkdirSync(dir, {recursive: true});
-      writeFileSync(join(dir, `${by}.json`), bytes);
+      writeFileSync(join(dir, `${by}.json.gz`), stored);
       const ready = Object.values(tilesOut).filter(t => t.status === 'READY').length;
       const total = Object.keys(tilesOut).length;
-      manifest.bundles[bundleKey] = {sha256: createHash('sha256').update(bytes).digest('hex'), bytes: bytes.length, readyTiles: ready, totalTiles: total};
-      stats.bundles++; stats.files++; stats.bytes += bytes.length; stats.gzipBytes += gz;
+      manifest.bundles[bundleKey] = {sha256: createHash('sha256').update(stored).digest('hex'), bytes: gz,
+        rawBytes: bytes.length, readyTiles: ready, totalTiles: total};
+      stats.bundles++; stats.files++; stats.bytes += bytes.length; stats.gzipBytes += gz; stats.storedBytes = (stats.storedBytes ?? 0) + gz;
       stats.maxBundleBytes = Math.max(stats.maxBundleBytes, bytes.length); stats.maxBundleGzipBytes = Math.max(stats.maxBundleGzipBytes, gz);
       stats.features += seen.size;
       for (const t of Object.values(tilesOut)) {
@@ -277,6 +282,7 @@ export function exportRegion({model, outDir, boundary, bundleZoom = 13, bufferM 
   const manifestBytes = Buffer.from(JSON.stringify(manifest), 'utf8');
   writeFileSync(join(outDir, 'manifest.json'), manifestBytes);
   stats.files++; stats.bytes += manifestBytes.length; stats.gzipBytes += gzipSync(manifestBytes).length;
+  stats.storedBytes = (stats.storedBytes ?? 0) + manifestBytes.length;
   stats.manifestBytes = manifestBytes.length;
   stats.durationMs = Date.now() - started;
   return {manifest, stats};

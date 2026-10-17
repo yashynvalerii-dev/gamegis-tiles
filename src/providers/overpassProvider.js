@@ -13,7 +13,7 @@ const SELECTORS = Object.freeze([
   '["highway"~"^(footway|path|pedestrian|living_street|track|steps)$"]',
   '["building"]', '["natural"="water"]', '["water"]',
   '["waterway"="riverbank"]', '["landuse"~"^(industrial|military|reservoir)$"]',
-  '["railway"]', '["military"]',
+  '["railway"]', '["military"]', '["power"~"^(line|minor_line|substation)$"]',
   '["access"~"^(private|no|customers|permit)$"]',
   '["foot"~"^(private|no)$"]',
 ]);
@@ -32,7 +32,7 @@ export function buildOverpassQuery({tile,bufferM=40,timeoutSec=25}={}){
   if(!Number.isInteger(timeoutSec)||timeoutSec<1||timeoutSec>25)throw new RangeError('timeoutSec must be 1..25');
   const bbox=outwardScope(t,bufferM);
   const coords=[bbox.south,bbox.west,bbox.north,bbox.east].map(f7).join(',');
-  const clauses=['node["entrance"]'];
+  const clauses=['node["entrance"]','node["power"~"^(tower|pole|substation)$"]'];
   for(const kind of ['way','relation']) for(const selector of SELECTORS)clauses.push(kind+selector);
   const query=`[out:json][timeout:${timeoutSec}];(\n${clauses.map(x=>`  ${x}(${coords});`).join('\n')}\n);out body geom;`;
   return {query,bbox,tile:t,bufferM,timeoutSec,datasetId:DATASET_ID,normalizationVersion:NORMALIZATION_VERSION};

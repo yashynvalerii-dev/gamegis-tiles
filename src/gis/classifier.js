@@ -46,6 +46,23 @@ export function isEntranceTags(tags = {}) {
   return active(tags, 'entrance');
 }
 
+const POWER_WAYS = new Set(['line', 'minor_line', 'substation']);
+const POWER_POINTS = new Set(['tower', 'pole', 'substation']);
+
+/** Overhead power lines and substation outlines (location tags are kept for clients to interpret). */
+export function isPowerWayTags(tags = {}) {
+  return POWER_WAYS.has(value(tags, 'power'));
+}
+
+export function isPowerPointTags(tags = {}) {
+  return POWER_POINTS.has(value(tags, 'power'));
+}
+
+/** Nodes published as standalone point features. */
+export function isPointFeatureTags(tags = {}) {
+  return isEntranceTags(tags) || isPowerPointTags(tags);
+}
+
 /** OSM way roles, no game placement decisions or implicit distance buffers. */
 export function classifyWayTags(tags = {}) {
   const classes = [];
@@ -53,6 +70,7 @@ export function classifyWayTags(tags = {}) {
   if (isBuildingTags(tags)) classes.push('building');
   if (isWaterTags(tags)) classes.push('water');
   if (isRailwayTags(tags)) classes.push('railway');
+  if (isPowerWayTags(tags)) classes.push('power');
   if (isRestrictedAreaTags(tags)) classes.push('restricted_area');
   else if (isRestrictedAccess(tags)) classes.push('restricted_way');
   return classes;
