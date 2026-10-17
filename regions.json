@@ -18,7 +18,12 @@
     "budgetMB": 700,
     "expireDays": 120,
     "windowDays": 60,
-    "_comment_rating": "Rating = distinct days with requests/activity in windowDays; radius 3/7/12/20 km at 1/2/4/8 days; lowest-priority requested areas are evicted above budgetMB; inactive ones after expireDays. Pinned regions below are never changed."
+    "_comment_rating": "Rating = distinct days with requests/activity in windowDays; radius 3/7/12/20 km at 1/2/4/8 days; lowest-priority requested areas are evicted above budgetMB; inactive ones after expireDays. Pinned regions below are never changed.",
+    "minRadiusKm": 3,
+    "maxRadiusKm": 20,
+    "marginKm": 3,
+    "reachKm": 8,
+    "growAfterDays": 2
   },
   "regions": [
     {

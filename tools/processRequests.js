@@ -13,6 +13,7 @@ import {fileURLToPath} from 'node:url';
 import {readRequests, planDemand} from '../src/requests/regionRequests.js';
 import {tileFor} from '../src/client/gamegis-client.js';
 
+const pick = (o, keys) => Object.fromEntries(keys.filter(k => Number.isFinite(o[k])).map(k => [k, o[k]]));
 const UA = {'user-agent': 'GameGIS-Broker/0.1 region-requests'};
 
 /**
@@ -48,7 +49,8 @@ export async function processRequests({configPath = 'regions.json', outPath = 'r
   const index = await (await get('https://download.geofabrik.de/index-v1.json', 'Geofabrik index')).json();
   const {regions, changes} = planDemand(requests, config.regions, requested.regions, index, {
     maxNewPerRun: s.maxNewPerRun ?? 2, maxTotalRegions: s.maxTotalRegions ?? 15, budgetMB: s.budgetMB ?? 700,
-    expireDays: s.expireDays ?? 120, windowDays: s.windowDays ?? 60, sizesMB, pinnedMB, isPublished, now});
+    expireDays: s.expireDays ?? 120, windowDays: s.windowDays ?? 60, sizesMB, pinnedMB, isPublished, now,
+    ...pick(s, ['minRadiusKm', 'maxRadiusKm', 'marginKm', 'reachKm', 'growAfterDays'])});
   const changed = JSON.stringify(regions) !== JSON.stringify(requested.regions);
   if (changed) writeFileSync(outPath, JSON.stringify({regions, updatedAt: now.toISOString()}, null, 2) + '\n');
   return {configured: true, changed, requests: requests.length, rejected, ...changes,

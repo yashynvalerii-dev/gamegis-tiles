@@ -133,19 +133,21 @@ export function planRegions(requests, existing, index, {radiusKm = 15, maxNewPer
 }
 
 // ---------------------------------------------------------------------------------------------
-// Rating system (planDemand). A requested region starts small and grows with demand; storage is spent
-// where people actually play.
-//  - rating = number of DISTINCT UTC days with requests/activity signals near the region in the last
-//    windowDays (several taps on one evening count once);
-//  - radius by rating: LEVELS (1 day -> 3 km ... 8+ days -> 20 km);
-//  - a signal counts for a region when it lies within radius + edgeKm (players at the edge make it grow);
-//  - signals far from every region create a new 3 km region (within maxNewPerRun / maxTotalRegions);
-//  - storage budget: when the site would exceed budgetMB, requested regions with the lowest priority
-//    (rating decayed by inactivity) are evicted; regions inactive for expireDays are evicted anyway;
-//  - pinned regions (regions.json) are never changed or evicted.
+// Demand system (planDemand). An area follows WHERE people actually play, not how often they tap:
+//  - every signal (a region request or a periodic "people play here" report) is a coarse point;
+//  - a signal inside an area only CONFIRMS it (keeps it alive, raises its rating) — the area does not grow;
+//  - an area covers the points played in the last windowDays: the smallest circle around them + marginKm
+//    (never below minRadiusKm, never above maxRadiusKm). Players who move past the edge make it grow in
+//    that direction; directions not played for windowDays are given back (the circle shrinks or moves);
+//  - a point outside the current circle counts only after growAfterDays distinct days there
+//    (one trip does not buy storage; a habit does);
+//  - signals farther than reachKm from every area start a new small area (maxNewPerRun / maxTotalRegions);
+//  - rating = distinct UTC days with signals in the window: it sets the priority for keeping an area;
+//  - storage budget: above budgetMB the lowest-priority areas are evicted; areas without any signal for
+//    expireDays are evicted anyway; pinned regions (regions.json) are never changed or evicted.
 
-export const LEVELS = Object.freeze([{minDays: 1, radiusKm: 3}, {minDays: 2, radiusKm: 7}, {minDays: 4, radiusKm: 12}, {minDays: 8, radiusKm: 20}]);
-export const radiusForRating = r => [...LEVELS].reverse().find(l => r >= l.minDays)?.radiusKm ?? LEVELS[0].radiusKm;
+export const DEMAND_DEFAULTS = Object.freeze({windowDays: 60, minRadiusKm: 3, maxRadiusKm: 20, marginKm: 3,
+  reachKm: 8, growAfterDays: 2});
 
 const dayOf = (at, now) => {
   const t = Date.parse(at);
@@ -175,58 +177,110 @@ export function priority(region, now = new Date()) {
   return (region.rating ?? 1) * 0.5 ** (idleDays / 30);
 }
 
+/** Smallest circle containing all points ({lat, lon}); returns {lat, lon, radiusKm}. Local flat projection. */
+export function enclosingCircle(points) {
+  if (!points.length) return null;
+  const lat0 = points[0].lat, kx = 111.32 * Math.cos(toRad(lat0)), ky = 111.32;
+  const P = points.map(p => ({x: (p.lon - points[0].lon) * kx, y: (p.lat - lat0) * ky}));
+  const inC = (c, p) => Math.hypot(p.x - c.x, p.y - c.y) <= c.r + 1e-9;
+  const two = (a, b) => ({x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, r: Math.hypot(a.x - b.x, a.y - b.y) / 2});
+  const three = (a, b, c) => {
+    const d = 2 * (a.x * (b.y - c.y) + b.x * (c.y - a.y) + c.x * (a.y - b.y));
+    if (Math.abs(d) < 1e-12) return [two(a, b), two(a, c), two(b, c)].sort((u, v) => v.r - u.r)[0];
+    const sq = q => q.x * q.x + q.y * q.y;
+    const x = (sq(a) * (b.y - c.y) + sq(b) * (c.y - a.y) + sq(c) * (a.y - b.y)) / d;
+    const y = (sq(a) * (c.x - b.x) + sq(b) * (a.x - c.x) + sq(c) * (b.x - a.x)) / d;
+    return {x, y, r: Math.hypot(a.x - x, a.y - y)};
+  };
+  let c = {x: P[0].x, y: P[0].y, r: 0};
+  for (let i = 1; i < P.length; i++) if (!inC(c, P[i])) {
+    c = {x: P[i].x, y: P[i].y, r: 0};
+    for (let j = 0; j < i; j++) if (!inC(c, P[j])) {
+      c = two(P[i], P[j]);
+      for (let k = 0; k < j; k++) if (!inC(c, P[k])) c = three(P[i], P[j], P[k]);
+    }
+  }
+  return {lat: lat0 + c.y / ky, lon: points[0].lon + c.x / kx, radiusKm: c.r};
+}
+
+/** Area for a set of played points: enclosing circle + margin, centre rounded (~0.5 km), radius in 0.5 km steps. */
+export function areaFor(points, {minRadiusKm, marginKm}) {
+  const c = enclosingCircle(points);
+  const lat = Math.round(c.lat * 200) / 200, lon = Math.round(c.lon * 200) / 200;
+  const shift = distanceKm(c, {lat, lon});
+  const radiusKm = Math.max(minRadiusKm, Math.ceil((c.radiusKm + marginKm + shift) * 2 - 1e-9) / 2);
+  return {lat: Number(lat.toFixed(3)), lon: Number(lon.toFixed(3)), radiusKm};
+}
+
 /**
- * pinned: regions.json regions (never touched). requested: current requested-regions (mutable copy is returned).
+ * pinned: regions.json regions (never touched). requested: current requested-regions (a new list is returned).
  * sizesMB: {regionId: storedMB} from the last build (for the budget). Returns {regions, changes}.
- * Public records keep only the area, rating, level and the ISO week of last activity (no exact days, no app ids).
+ * Public records keep only the area, rating and the ISO week of last activity (no exact days, no app ids).
  */
-export function planDemand(requests, pinned, requested, index, {windowDays = 60, edgeKm = 5, maxNewPerRun = 2,
+export function planDemand(requests, pinned, requested, index, {windowDays = DEMAND_DEFAULTS.windowDays,
+  minRadiusKm = DEMAND_DEFAULTS.minRadiusKm, maxRadiusKm = DEMAND_DEFAULTS.maxRadiusKm, marginKm = DEMAND_DEFAULTS.marginKm,
+  reachKm = DEMAND_DEFAULTS.reachKm, growAfterDays = DEMAND_DEFAULTS.growAfterDays, maxNewPerRun = 2,
   maxTotalRegions = 15, budgetMB = 700, sizesMB = {}, pinnedMB = 0, expireDays = 120, isPublished = null,
   now = new Date()} = {}) {
-  const changes = {added: [], grown: [], evicted: [], skipped: {}};
+  const changes = {added: [], resized: [], evicted: [], skipped: {}};
   const skip = r => { changes.skipped[r] = (changes.skipped[r] ?? 0) + 1; };
   const since = new Date(now - windowDays * 86400000).toISOString().slice(0, 10);
-  // Internal day sets are rebuilt from the CSV every run (the CSV is the private source of truth).
-  const regions = requested.map(r => ({...r, publish: {circle: {...r.publish.circle}}, _days: new Set(), _prevRadius: r.publish.circle.radiusKm}));
-  const inPinned = p => pinned.some(r => r.publish?.circle && distanceKm(p, r.publish.circle) <= r.publish.circle.radiusKm) || Boolean(isPublished?.(p) && !regions.some(r => distanceKm(p, r.publish.circle) <= r.publish.circle.radiusKm + edgeKm));
+  const opts = {minRadiusKm, marginKm};
+  // Internal point sets are rebuilt from the CSV every run (the CSV is the private source of truth).
+  const fresh = r => ({...r, publish: {circle: {...r.publish.circle}}, _points: new Map(), _prev: {...r.publish.circle}});
+  const regions = requested.map(fresh);
+  const nearest = p => regions.map(r => ({r, d: distanceKm(p, r.publish.circle)}))
+    .filter(x => x.d <= x.r.publish.circle.radiusKm + reachKm).sort((a, b) => a.d - b.d)[0]?.r;
+  const inPinned = p => pinned.some(r => r.publish?.circle && distanceKm(p, r.publish.circle) <= r.publish.circle.radiusKm) ||
+    Boolean(isPublished?.(p) && !nearest(p));
+  const addPoint = (r, req, day) => {
+    const k = `${req.lat},${req.lon}`;
+    const e = r._points.get(k) ?? {lat: req.lat, lon: req.lon, days: new Set()};
+    e.days.add(day); r._points.set(k, e);
+  };
 
   for (const req of requests) {
     const day = dayOf(req.at, now);
     if (day < since) { skip('OUTSIDE_WINDOW'); continue; }
-    const near = regions
-      .map(r => ({r, d: distanceKm(req, r.publish.circle)}))
-      .filter(x => x.d <= x.r.publish.circle.radiusKm + edgeKm)
-      .sort((a, b) => a.d - b.d)[0];
-    if (near) { near.r._days.add(day); continue; }
+    const near = nearest(req);
+    if (near) { addPoint(near, req, day); continue; }
     if (inPinned(req)) { skip('PINNED_REGION'); continue; }
     if (changes.added.length >= maxNewPerRun) { skip('RUN_LIMIT'); continue; }
     if (pinned.length + regions.length >= maxTotalRegions) { skip('TOTAL_LIMIT'); continue; }
-    const circle = {lat: req.lat, lon: req.lon, radiusKm: LEVELS[0].radiusKm};
+    const circle = {lat: req.lat, lon: req.lon, radiusKm: minRadiusKm};
     const ex = chooseExtract(index, circle);
     if (!ex) { skip('NO_EXTRACT'); continue; }
-    const region = {id: regionId(req), name: `${ex.name} ${req.lat.toFixed(2)},${req.lon.toFixed(2)}`, extract: ex.extract,
-      publish: {circle}, addedOn: now.toISOString().slice(0, 10), _days: new Set([day]), _new: true};
+    const region = {...fresh({id: regionId(req), name: `${ex.name} ${req.lat.toFixed(2)},${req.lon.toFixed(2)}`, extract: ex.extract,
+      publish: {circle}, addedOn: now.toISOString().slice(0, 10)}), _new: true};
+    addPoint(region, req, day);
     regions.push(region); changes.added.push(region.id);
   }
 
   for (const r of regions) {
-    if (r._days.size) {
-      r.rating = Math.max(r._days.size, r._new ? 1 : 0);
-      r._lastDay = [...r._days].sort().at(-1);
-    } else r.rating = r.rating ?? 1;
-    const want = radiusForRating(r.rating);
-    if (want > r.publish.circle.radiusKm) {
-      const ex = chooseExtract(index, {...r.publish.circle, radiusKm: want});
-      if (ex) {
-        r.publish.circle.radiusKm = want; r.extract = ex.extract;
-        if (!r._new) changes.grown.push(`${r.id}:${want}km`);
-      }
+    const pts = [...r._points.values()];
+    if (!pts.length) { r.rating = r.rating ?? 1; continue; }                     // no news: keep as is until expiry
+    r.rating = new Set(pts.flatMap(p => [...p.days])).size;
+    r._lastDay = pts.flatMap(p => [...p.days]).sort().at(-1);
+    // Points inside the current area always count (confirmation); outside — only once they became a habit.
+    const counted = pts.filter(p => distanceKm(p, r._prev) <= r._prev.radiusKm || p.days.size >= growAfterDays || r._new);
+    if (!counted.length) continue;
+    counted.sort((a, b) => distanceKm(a, r._prev) - distanceKm(b, r._prev));
+    let area = areaFor(counted, opts);
+    while (area.radiusKm > maxRadiusKm && counted.length > 1) { counted.pop(); area = areaFor(counted, opts); skip('MAX_RADIUS'); }
+    area.radiusKm = Math.min(area.radiusKm, maxRadiusKm);
+    const ex = chooseExtract(index, area);
+    if (!ex) { skip('NO_EXTRACT'); continue; }
+    const p = r._prev;
+    if (r._new) { r.publish.circle = area; r.extract = ex.extract; continue; }
+    if (area.lat !== p.lat || area.lon !== p.lon || area.radiusKm !== p.radiusKm) {
+      r.publish.circle = area; r.extract = ex.extract;
+      changes.resized.push(`${r.id}:${p.radiusKm}->${area.radiusKm}km`);
     }
   }
 
   // Expiry and storage budget. Size grows with area (radius^2); unknown sizes use a generous density.
-  const est = r => sizesMB[r.id] && r._prevRadius
-    ? sizesMB[r.id] * (r.publish.circle.radiusKm / r._prevRadius) ** 2
+  const est = r => sizesMB[r.id] && r._prev?.radiusKm
+    ? sizesMB[r.id] * (r.publish.circle.radiusKm / r._prev.radiusKm) ** 2
     : 0.02 * r.publish.circle.radiusKm ** 2;
   const kept = regions.filter(r => {
     if ((now - Date.parse(lastActive(r))) / 86400000 > expireDays) { changes.evicted.push(`${r.id}:inactive`); return false; }
@@ -241,9 +295,8 @@ export function planDemand(requests, pinned, requested, index, {windowDays = 60,
     changes.added = changes.added.filter(id => id !== victim.id);
   }
   const out = kept.map(r => {
-    const {_days, _new, _prevRadius, _lastDay, ...pub} = r;
-    return {...pub, level: LEVELS.findIndex(l => l.radiusKm === r.publish.circle.radiusKm) + 1,
-      lastActiveWeek: isoWeek(new Date(lastActive(r)))};
+    const {_points, _new, _prev, _lastDay, level, ...pub} = r;
+    return {...pub, lastActiveWeek: isoWeek(new Date(lastActive(r)))};
   });
   return {regions: out, changes};
 }

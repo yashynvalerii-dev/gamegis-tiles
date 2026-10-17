@@ -21,6 +21,8 @@
 export const CLIENT_VERSION = '1.0.0';
 export const SUPPORTED_MANIFESTS = ['GAMEGIS_TILE_MANIFEST_V2'];
 export const ATTRIBUTION = '© OpenStreetMap contributors (ODbL)';
+/** Activity reports are accepted this far outside a requested area so the area can follow the players. */
+export const ACTIVITY_REACH_KM = 8;
 const GROUP_NAMES = ['walkableWays', 'buildings', 'entrances', 'water', 'railways', 'power', 'restrictedAreas', 'restrictedWays'];
 
 /** Web Mercator tile of a position. */
@@ -264,19 +266,22 @@ export function createTileClient({mirrors, fetchImpl = globalThis.fetch, timeout
   }
 
   /**
-   * "People play here": keeps an area prepared on request alive and lets it grow. Sends at most one signal
+   * "People play here": confirms an area prepared on request and lets it follow the players. Play inside the
+   * area only confirms it; play near its edge (up to ACTIVITY_REACH_KM outside) on several days makes it grow
+   * that way. Sends at most one signal
    * per area per 24 h (remembered in localStorage when available), only inside areas that were built on
-   * request (manifest regions with kind "requested"). Call it when a game session starts.
+   * request (manifest regions with kind "requested") or near them. Call it when a game session starts.
    * Returns {sent: true} or {sent: false, reason: NOT_IN_REQUESTED_AREA | ALREADY_TODAY | REQUESTS_NOT_CONFIGURED | NETWORK_ERROR}.
    */
   async function reportActivity({lat, lon, app, nowMs = Date.now()}) {
     checkApp(app);
     const m = await getManifest();
     const region = (m.regions ?? []).find(r => r.kind === 'requested' && r.circle &&
-      Math.hypot((lat - r.circle.lat) * 111.32, (lon - r.circle.lon) * 111.32 * Math.cos(lat * Math.PI / 180)) <= r.circle.radiusKm);
+      Math.hypot((lat - r.circle.lat) * 111.32, (lon - r.circle.lon) * 111.32 * Math.cos(lat * Math.PI / 180)) <= r.circle.radiusKm + ACTIVITY_REACH_KM);
     if (!region) return {sent: false, reason: 'NOT_IN_REQUESTED_AREA'};
     if (!formReady(m)) return {sent: false, reason: 'REQUESTS_NOT_CONFIGURED'};
-    const key = `gamegis-activity:${region.id}`;
+    // one signal per day per coarse spot (~5 km): play at home and at the edge on one day are both heard
+    const key = `gamegis-activity:${region.id}:${Math.round(lat * 20) / 20}/${Math.round(lon * 20) / 20}`;
     let last = activity.get(key);
     try { last ??= Number(globalThis.localStorage?.getItem(key)) || undefined; } catch {}
     if (last && nowMs - last < 86400000) return {sent: false, reason: 'ALREADY_TODAY'};
