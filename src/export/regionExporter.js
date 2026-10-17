@@ -265,8 +265,27 @@ const featureBoxIntersects = (f, b) => f.bbox.minLon <= b.east && f.bbox.maxLon 
  * Exports every bundle that intersects the region boundary.
  * boundary: object from polyFile.makeRegion/parsePoly; when absent the extract header bbox is used.
  */
+/** Decimal places of published coordinates: 6 = ~11 cm (OSM itself stores 7, ~1 cm; games do not need it). */
+export const COORD_DECIMALS = 6;
+/** Rounds positions; consecutive positions that become equal are merged (rings stay explicitly closed). */
+export function roundGeometry(geometry, decimals = COORD_DECIMALS) {
+  if (decimals >= 7) return geometry;
+  const f = 10 ** decimals, r = v => Math.round(v * f) / f;
+  const line = pts => pts.map(([x, y]) => [r(x), r(y)]).filter((p, i, a) => i === 0 || p[0] !== a[i - 1][0] || p[1] !== a[i - 1][1]);
+  const c = geometry.coordinates;
+  switch (geometry.type) {
+    case 'Point': return {type: 'Point', coordinates: [r(c[0]), r(c[1])]};
+    case 'LineString': return {type: 'LineString', coordinates: line(c)};
+    case 'MultiLineString': return {type: geometry.type, coordinates: c.map(line)};
+    // a ring that would collapse below 4 positions keeps full precision (never publish an invalid polygon)
+    case 'Polygon': { const rings = c.map(line); return rings.every(x => x.length >= 4) ? {type: 'Polygon', coordinates: rings} : geometry; }
+    case 'MultiPolygon': { const ps = c.map(p => p.map(line)); return ps.every(p => p.every(x => x.length >= 4)) ? {type: 'MultiPolygon', coordinates: ps} : geometry; }
+    default: return geometry;
+  }
+}
+
 export function exportRegion({model, outDir, boundary, publish = null, bundleZoom = 13, bufferM = 40, onProgress = () => {},
-  generatedAt = new Date().toISOString(), writeManifest = true}) {
+  generatedAt = new Date().toISOString(), writeManifest = true, coordDecimals = COORD_DECIMALS}) {
   if (bundleZoom > TILE_ZOOM || bundleZoom < 10) throw new RangeError('bundleZoom must be 10..15');
   const started = Date.now();
   const header = model.header;
@@ -323,7 +342,7 @@ export function exportRegion({model, outDir, boundary, publish = null, bundleZoo
           const key = `${f.sourceType}/${f.sourceId}/${f.featureClass}`;
           if (seen.has(key)) continue;
           seen.add(key);
-          groups[GROUPS[f.featureClass]].push({type: 'Feature', geometry: f.geometry,
+          groups[GROUPS[f.featureClass]].push({type: 'Feature', geometry: roundGeometry(f.geometry, coordDecimals),
             properties: {tags: f.tags, sourceType: f.sourceType, sourceId: f.sourceId}});
         }
       }
