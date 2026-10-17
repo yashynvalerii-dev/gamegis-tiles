@@ -1,10 +1,16 @@
 # Builds static tile bundles from the latest Geofabrik extract and publishes them on GitHub Pages.
 # Runs weekly, on demand, and when the pipeline code changes.
+# A build check compares each build with the published site; a broken build is not published (GitHub e-mails the owner).
 name: build-tiles
 on:
   schedule:
     - cron: '17 3 * * 1'   # Mondays 03:17 UTC
   workflow_dispatch:
+    inputs:
+      accept:
+        description: 'Publish even if the build check blocks it (after a human looked at build-check.json)'
+        type: boolean
+        default: false
   workflow_call:
   push:
     branches: [main]
@@ -36,6 +42,10 @@ jobs:
         run: |
           set -o pipefail
           npm run export-tiles -- --config regions.json --config requested-regions.json --out site 2>&1 | tee diag/export.log
+      - name: Check the build against the published site (blocks broken builds)
+        run: |
+          curl -fsS "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/export-report.json?v=${{ github.run_id }}" -o prev-report.json || echo "no previous report to compare"
+          node tools/checkBuild.js --prev prev-report.json --next site/export-report.json --config regions.json --out site/build-check.json ${{ inputs.accept && '--accept' || '' }} | tee diag/build-check.json
       - name: Publish diagnostics on failure (branch ci-diagnostics)
         if: failure()
         run: |
