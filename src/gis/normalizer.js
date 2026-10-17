@@ -22,7 +22,7 @@ export const PROCESSED_LAYERS = Object.freeze([
  */
 export const PUBLISHED_TAG_KEYS = Object.freeze(new Set([
   'name', 'ref', 'type', 'area', 'layer', 'level', 'tunnel', 'bridge', 'covered', 'indoor', 'location',
-  'highway', 'footway', 'sidewalk', 'surface', 'smoothness', 'tracktype', 'lit', 'wheelchair', 'service',
+  'highway', 'footway', 'sidewalk', 'surface', 'smoothness', 'tracktype', 'sac_scale', 'trail_visibility', 'lit', 'wheelchair', 'service',
   'access', 'foot', 'bicycle', 'motor_vehicle', 'barrier',
   'entrance', 'door', 'building', 'building:levels',
   'natural', 'water', 'waterway', 'intermittent', 'landuse', 'military',
