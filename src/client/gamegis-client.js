@@ -238,7 +238,7 @@ export function createTileClient({mirrors, fetchImpl = globalThis.fetch, timeout
     return {lat: cLat, lon: cLon};
   };
   const formReady = m => Boolean(m.regionRequests?.url && /^https:\/\/docs\.google\.com\/forms\//.test(m.regionRequests.url) && m.regionRequests.fields);
-  const checkApp = app => { if (typeof app !== 'string' || !/^[a-z][a-z0-9-]{1,40}$/.test(app)) throw new TypeError('app must be a short id like "radar-fox"'); };
+  const checkApp = app => { if (typeof app !== 'string' || !/^[a-z][a-z0-9-]{1,40}$/.test(app)) throw new TypeError('app must be a short id like "my-game"'); };
 
   /**
    * Asks for map data around the player when it is missing (not prepared yet, or the player is near the
