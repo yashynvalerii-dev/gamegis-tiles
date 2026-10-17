@@ -5,9 +5,10 @@ on:
   schedule:
     - cron: '17 3 * * 1'   # Mondays 03:17 UTC
   workflow_dispatch:
+  workflow_call:
   push:
     branches: [main]
-    paths: ['src/**', 'tools/**', 'site-template/**', '.github/workflows/build-tiles.yml']
+    paths: ['src/**', 'tools/**', 'site-template/**', 'regions.json', 'requested-regions.json', '.github/workflows/build-tiles.yml']
 permissions:
   contents: write
   pages: write
@@ -21,6 +22,8 @@ jobs:
     timeout-minutes: 150
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: main   # when called after a requests commit, build the newest main
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
@@ -28,11 +31,11 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p diag
-          npm run download-extract -- --config regions.json 2>&1 | tee diag/download.log
+          npm run download-extract -- --config regions.json --config requested-regions.json 2>&1 | tee diag/download.log
       - name: Export tile bundles for all regions
         run: |
           set -o pipefail
-          npm run export-tiles -- --config regions.json --out site 2>&1 | tee diag/export.log
+          npm run export-tiles -- --config regions.json --config requested-regions.json --out site 2>&1 | tee diag/export.log
       - name: Publish diagnostics on failure (branch ci-diagnostics)
         if: failure()
         run: |

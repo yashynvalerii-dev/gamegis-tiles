@@ -25,7 +25,7 @@ export function parseArgs(argv) {
     if (a === '--pbf') o.pbfPath = resolve(v());
     else if (a === '--poly') o.polyPath = resolve(v());
     else if (a === '--out') o.outDir = resolve(v());
-    else if (a === '--config') o.configPath = resolve(v());
+    else if (a === '--config') (o.configPaths ??= []).push(resolve(v()));
     else if (a === '--extracts') o.extractsDir = resolve(v());
     else if (a === '--bundle-zoom') o.bundleZoom = Number(v());
     else throw new Error(`Unknown argument ${a}`);
@@ -44,7 +44,9 @@ function grow(b, km) {
 }
 
 export function runConfig(o, {log = console.log} = {}) {
-  const config = JSON.parse(readFileSync(o.configPath, 'utf8'));
+  // Several configs (e.g. regions.json + requested-regions.json) are merged; settings come from the first.
+  const configs = (o.configPaths ?? [o.configPath]).filter(p => existsSync(p)).map(p => JSON.parse(readFileSync(p, 'utf8')));
+  const config = {...configs[0], regions: configs.flatMap(c => c.regions ?? [])};
   rmSync(o.outDir, {recursive: true, force: true}); mkdirSync(o.outDir, {recursive: true});
   const t0 = Date.now(), parts = [], regionStats = [];
   for (const r of config.regions) {
@@ -69,6 +71,10 @@ export function runConfig(o, {log = console.log} = {}) {
       `INCOMPLETE ${stats.tiles.INCOMPLETE} ${JSON.stringify(stats.incompleteReasons)} (${((Date.now() - t) / 1000).toFixed(0)} s)`);
   }
   const manifest = mergeManifests(parts);
+  if (config.regionRequests?.formUrl && Object.values(config.regionRequests.fields ?? {}).every(Boolean)) {
+    const {formUrl, fields} = config.regionRequests;
+    manifest.regionRequests = {type: 'google-form', url: formUrl, fields};  // public: lets clients ask for new regions
+  }
   const bytes = Buffer.from(JSON.stringify(manifest), 'utf8');
   writeFileSync(join(o.outDir, 'manifest.json'), bytes);
   const report = {regions: regionStats, bundles: Object.keys(manifest.bundles).length,
@@ -81,7 +87,7 @@ export function runConfig(o, {log = console.log} = {}) {
 }
 
 export function runExport(o, {log = console.log} = {}) {
-  if (o.configPath) return runConfig(o, {log});
+  if (o.configPath || o.configPaths) return runConfig(o, {log});
   if (!existsSync(o.pbfPath)) throw new Error(`Extract not found: ${o.pbfPath} (run: npm.cmd run download-extract)`);
   const boundary = existsSync(o.polyPath) ? readPoly(o.polyPath) : null;
   log(boundary ? `Region boundary: ${o.polyPath}` : 'WARNING: no .poly boundary file; using extract bbox (border tiles may be wrongly certified)');

@@ -1,0 +1,43 @@
+# Every 3 hours: read region requests sent by games, add new regions within limits, rebuild the site if needed.
+name: region-requests
+on:
+  schedule:
+    - cron: '23 */3 * * *'
+  workflow_dispatch:
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+concurrency:
+  group: region-requests
+  cancel-in-progress: false
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      changed: ${{ steps.plan.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - id: plan
+        name: Plan regions from requests
+        env:
+          REQUESTS_CSV_URL: ${{ secrets.REQUESTS_CSV_URL }}
+          REQUESTS_APPS: ${{ secrets.REQUESTS_APPS }}
+          TILES_SITE_URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/
+        run: node tools/processRequests.js --config regions.json --out requested-regions.json
+      - name: Commit new regions
+        if: steps.plan.outputs.changed == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add requested-regions.json
+          git commit -qm "regions: add requested regions"
+          git push
+  build:
+    needs: plan
+    if: needs.plan.outputs.changed == 'true'
+    uses: ./.github/workflows/build-tiles.yml

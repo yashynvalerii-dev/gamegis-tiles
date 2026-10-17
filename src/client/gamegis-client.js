@@ -228,5 +228,32 @@ export function createTileClient({mirrors, fetchImpl = globalThis.fetch, timeout
       dataTimestamp: m.dataTimestamp, attribution: ATTRIBUTION};
   }
 
-  return {getManifest, getBundle, getArea, log};
+  const requested = new Set();
+  /**
+   * Asks for a new region when the player's area is not prepared. Sends only COARSE coordinates (~5 km)
+   * and the app id to the request form published in the manifest; nothing personal. Returns
+   * {sent: true, lat, lon} or {sent: false, reason: ALREADY_AVAILABLE | ALREADY_REQUESTED |
+   * REQUESTS_NOT_CONFIGURED | NETWORK_ERROR}. What the game shows meanwhile is the game's decision.
+   */
+  async function requestRegion({lat, lon, app}) {
+    if (typeof app !== 'string' || !/^[a-z][a-z0-9-]{1,40}$/.test(app)) throw new TypeError('app must be a short id like "radar-fox"');
+    const m = await getManifest();
+    const t = tileFor(lat, lon, m.bundleZoom);
+    if (m.bundles[`${m.bundleZoom}/${t.x}/${t.y}`]) return {sent: false, reason: 'ALREADY_AVAILABLE'};
+    const rr = m.regionRequests;
+    if (!rr?.url || !/^https:\/\/docs\.google\.com\/forms\//.test(rr.url) || !rr.fields) return {sent: false, reason: 'REQUESTS_NOT_CONFIGURED'};
+    const cLat = Math.round(lat * 20) / 20, cLon = Math.round(lon * 20) / 20;
+    const key = `${cLat}/${cLon}`;
+    if (requested.has(key)) return {sent: false, reason: 'ALREADY_REQUESTED'};
+    const body = new URLSearchParams({[rr.fields.lat]: cLat.toFixed(2), [rr.fields.lon]: cLon.toFixed(2), [rr.fields.app]: app});
+    try {
+      // The form answers without CORS headers; the request is still recorded. The response is opaque by design.
+      await timedFetch(rr.url, {method: 'POST', mode: 'no-cors', body});
+    } catch { return {sent: false, reason: 'NETWORK_ERROR'}; }
+    requested.add(key);
+    log.push({event: 'region-request', lat: cLat, lon: cLon, app});
+    return {sent: true, lat: cLat, lon: cLon};
+  }
+
+  return {getManifest, getBundle, getArea, requestRegion, log};
 }

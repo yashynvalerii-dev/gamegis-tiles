@@ -16,7 +16,10 @@ The build runs here in GitHub Actions every week: it downloads the extracts list
    `railways`, `power`, `restrictedAreas`, `restrictedWays` (coordinates `[lon, lat]`).
    Power features keep `power`, `voltage` and `location` (e.g. `underground`) tags.
 
-A missing bundle means the area has not been prepared yet.
+A missing bundle means the area has not been prepared yet. Clients may then ask for the area with
+`requestRegion({lat, lon, app})` of the client below: it sends only coarse (~5 km) coordinates and an app id
+to the request form listed in `manifest.json` (`regionRequests`). Requests are processed every 3 hours
+(new areas: 15 km circles, limited per run and in total); see `requested-regions.json`.
 
 ### Ready-made client
 

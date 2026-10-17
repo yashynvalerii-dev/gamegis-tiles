@@ -7,7 +7,7 @@
  *   npm.cmd run download-extract -- --region europe/ukraine    one extract + its .poly
  *   npm.cmd run download-extract -- --config regions.json      every extract and publish boundary in the config
  */
-import {createWriteStream, mkdirSync, renameSync, rmSync, statSync, createReadStream, writeFileSync, readFileSync} from 'node:fs';
+import {createWriteStream, mkdirSync, renameSync, rmSync, statSync, createReadStream, writeFileSync, readFileSync, existsSync} from 'node:fs';
 import {createHash} from 'node:crypto';
 import {join, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -88,7 +88,9 @@ export function plan(args) {
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--region') { extracts.add(args[++i]); polys.add(args[i]); }
     else if (args[i] === '--config') {
-      const config = JSON.parse(readFileSync(resolve(args[++i]), 'utf8'));
+      const path = resolve(args[++i]);
+      if (!existsSync(path)) continue;   // optional configs (requested-regions.json) may not exist yet
+      const config = JSON.parse(readFileSync(path, 'utf8'));
       for (const r of config.regions) {
         extracts.add(r.extract); polys.add(r.extract);
         if (r.publish?.poly) polys.add(r.publish.poly);
