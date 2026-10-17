@@ -71,9 +71,9 @@ export function runConfig(o, {log = console.log} = {}) {
       `INCOMPLETE ${stats.tiles.INCOMPLETE} ${JSON.stringify(stats.incompleteReasons)} (${((Date.now() - t) / 1000).toFixed(0)} s)`);
   }
   const manifest = mergeManifests(parts);
-  if (config.regionRequests?.formUrl && Object.values(config.regionRequests.fields ?? {}).every(Boolean)) {
-    const {formUrl, fields} = config.regionRequests;
-    manifest.regionRequests = {type: 'google-form', url: formUrl, fields};  // public: lets clients ask for new regions
+  if (config.regionRequests?.endpoint) {
+    // public: where clients send region requests and activity (contract v1, see gamegis-client.js)
+    manifest.regionRequests = {type: 'endpoint', version: 1, url: config.regionRequests.endpoint};
   }
   const bytes = Buffer.from(JSON.stringify(manifest), 'utf8');
   writeFileSync(join(o.outDir, 'manifest.json'), bytes);

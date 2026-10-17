@@ -1,13 +1,8 @@
 {
   "_comment": "Regions published as static tiles. extract = Geofabrik path of the source extract (its .poly marks where data is complete); publish = which area to publish: a Geofabrik .poly path or a circle.",
   "regionRequests": {
-    "_comment": "Games ask for new regions through a Google Form (formUrl + field ids are public). The responses CSV link is the REQUESTS_CSV_URL secret of the tiles repository, never stored here. The site URL comes from TILES_SITE_URL in the workflow; an optional app allowlist from the REQUESTS_APPS secret.",
-    "formUrl": "",
-    "fields": {
-      "lat": "",
-      "lon": "",
-      "app": ""
-    },
+    "_comment": "Games send region requests and activity to the request endpoint (contract v1 in src/client/gamegis-client.js; today a Google Apps Script web app, see service/requests-endpoint). Its address is public. The list of collected signals is read through the REQUESTS_CSV_URL secret of the tiles repository (endpoint address + read key), never stored here.",
+    "endpoint": "",
     "columns": {
       "lat": "lat",
       "lon": "lon",

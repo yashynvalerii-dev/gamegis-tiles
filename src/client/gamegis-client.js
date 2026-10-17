@@ -126,7 +126,17 @@ export function toOsmElements(data, {bbox = null, holes = 'drop'} = {}) {
  *   fetchImpl: custom fetch (tests); timeoutMs: per request (default 15000)
  *   cacheName: Cache Storage name for offline reuse (default 'gamegis-tiles'; null disables)
  */
-export function createTileClient({mirrors, fetchImpl = globalThis.fetch, timeoutMs = 15000, cacheName = 'gamegis-tiles'} = {}) {
+/**
+ * Request endpoint contract v1 (any implementation: today a Google Apps Script web app, later our own server):
+ *   POST <url>, body text/plain JSON {v: 1, kind: "request"|"activity", lat, lon, app} (coordinates already coarse)
+ *   -> JSON {ok: true, status: "ACCEPTED"|"DUPLICATE"} or {ok: false, status: "INVALID"|"RATE_LIMITED"|"FULL"}.
+ * Only endpoints with these prefixes are trusted from a manifest (a tampered mirror cannot redirect players' data);
+ * a game can add its own server through createTileClient({requestEndpoints}).
+ */
+export const TRUSTED_REQUEST_ENDPOINTS = ['https://script.google.com/macros/s/'];
+
+export function createTileClient({mirrors, fetchImpl = globalThis.fetch, timeoutMs = 15000, cacheName = 'gamegis-tiles',
+  requestEndpoints = []} = {}) {
   if (!Array.isArray(mirrors) || !mirrors.length) throw new TypeError('mirrors: at least one base URL is required');
   let manifestPromise = null;
   const memory = new Map(); // bundle key -> parsed bundle (per session)
@@ -231,23 +241,27 @@ export function createTileClient({mirrors, fetchImpl = globalThis.fetch, timeout
   }
 
   const requested = new Set();
-  const sendSignal = async (m, lat, lon, app) => {
-    const rr = m.regionRequests;
+  const trusted = [...TRUSTED_REQUEST_ENDPOINTS, ...requestEndpoints];
+  const sendSignal = async (m, lat, lon, app, kind) => {
     const cLat = Math.round(lat * 20) / 20, cLon = Math.round(lon * 20) / 20;
-    const body = new URLSearchParams({[rr.fields.lat]: cLat.toFixed(2), [rr.fields.lon]: cLon.toFixed(2), [rr.fields.app]: app});
-    // The form answers without CORS headers; the request is still recorded. The response is opaque by design.
-    await timedFetch(rr.url, {method: 'POST', mode: 'no-cors', body});
-    return {lat: cLat, lon: cLon};
+    // text/plain keeps it a "simple" request (no CORS preflight); the answer is readable JSON.
+    const res = await timedFetch(m.regionRequests.url, {method: 'POST', redirect: 'follow',
+      headers: {'content-type': 'text/plain;charset=utf-8'},
+      body: JSON.stringify({v: 1, kind, lat: Number(cLat.toFixed(2)), lon: Number(cLon.toFixed(2)), app})});
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const answer = await res.json();
+    return {lat: cLat, lon: cLon, ok: answer?.ok === true, status: String(answer?.status ?? 'UNKNOWN')};
   };
-  const formReady = m => Boolean(m.regionRequests?.url && /^https:\/\/docs\.google\.com\/forms\//.test(m.regionRequests.url) && m.regionRequests.fields);
+  const endpointReady = m => m.regionRequests?.type === 'endpoint' && typeof m.regionRequests.url === 'string' &&
+    trusted.some(prefix => m.regionRequests.url.startsWith(prefix));
   const checkApp = app => { if (typeof app !== 'string' || !/^[a-z][a-z0-9-]{1,40}$/.test(app)) throw new TypeError('app must be a short id like "my-game"'); };
 
   /**
    * Asks for map data around the player when it is missing (not prepared yet, or the player is near the
-   * edge of a prepared area). Sends only COARSE coordinates (~5 km) and the app id to the request form
+   * edge of a prepared area). Sends only COARSE coordinates (~5 km) and the app id to the request endpoint
    * published in the manifest; nothing personal. Requests near an existing requested area raise its rating
    * (it grows); far ones create a new small area. Returns {sent: true, lat, lon} or {sent: false, reason:
-   * ALREADY_AVAILABLE | ALREADY_REQUESTED | REQUESTS_NOT_CONFIGURED | NETWORK_ERROR}.
+   * ALREADY_AVAILABLE | ALREADY_REQUESTED | REQUESTS_NOT_CONFIGURED | NETWORK_ERROR | RATE_LIMITED | FULL | INVALID}.
    * What the game shows meanwhile is the game's decision.
    */
   async function requestRegion({lat, lon, app, radiusM = 1000}) {
@@ -255,14 +269,15 @@ export function createTileClient({mirrors, fetchImpl = globalThis.fetch, timeout
     const m = await getManifest();
     const area = await getArea({lat, lon, radiusM});
     if (area.status === 'READY') return {sent: false, reason: 'ALREADY_AVAILABLE'};
-    if (!formReady(m)) return {sent: false, reason: 'REQUESTS_NOT_CONFIGURED'};
+    if (!endpointReady(m)) return {sent: false, reason: 'REQUESTS_NOT_CONFIGURED'};
     const key = `${Math.round(lat * 20) / 20}/${Math.round(lon * 20) / 20}`;
     if (requested.has(key)) return {sent: false, reason: 'ALREADY_REQUESTED'};
     let c;
-    try { c = await sendSignal(m, lat, lon, app); } catch { return {sent: false, reason: 'NETWORK_ERROR'}; }
+    try { c = await sendSignal(m, lat, lon, app, 'request'); } catch { return {sent: false, reason: 'NETWORK_ERROR'}; }
+    if (!c.ok) return {sent: false, reason: c.status};
     requested.add(key);
-    log.push({event: 'region-request', ...c, app});
-    return {sent: true, ...c};
+    log.push({event: 'region-request', lat: c.lat, lon: c.lon, status: c.status, app});
+    return {sent: true, lat: c.lat, lon: c.lon, status: c.status};
   }
 
   /**
@@ -279,13 +294,15 @@ export function createTileClient({mirrors, fetchImpl = globalThis.fetch, timeout
     const region = (m.regions ?? []).find(r => r.kind === 'requested' && r.circle &&
       Math.hypot((lat - r.circle.lat) * 111.32, (lon - r.circle.lon) * 111.32 * Math.cos(lat * Math.PI / 180)) <= r.circle.radiusKm + ACTIVITY_REACH_KM);
     if (!region) return {sent: false, reason: 'NOT_IN_REQUESTED_AREA'};
-    if (!formReady(m)) return {sent: false, reason: 'REQUESTS_NOT_CONFIGURED'};
+    if (!endpointReady(m)) return {sent: false, reason: 'REQUESTS_NOT_CONFIGURED'};
     // one signal per day per coarse spot (~5 km): play at home and at the edge on one day are both heard
     const key = `gamegis-activity:${region.id}:${Math.round(lat * 20) / 20}/${Math.round(lon * 20) / 20}`;
     let last = activity.get(key);
     try { last ??= Number(globalThis.localStorage?.getItem(key)) || undefined; } catch {}
     if (last && nowMs - last < 86400000) return {sent: false, reason: 'ALREADY_TODAY'};
-    try { await sendSignal(m, lat, lon, app); } catch { return {sent: false, reason: 'NETWORK_ERROR'}; }
+    let c;
+    try { c = await sendSignal(m, lat, lon, app, 'activity'); } catch { return {sent: false, reason: 'NETWORK_ERROR'}; }
+    if (!c.ok) return {sent: false, reason: c.status};
     activity.set(key, nowMs);
     try { globalThis.localStorage?.setItem(key, String(nowMs)); } catch {}
     log.push({event: 'activity', region: region.id, app});
