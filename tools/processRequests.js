@@ -60,6 +60,12 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   const a = process.argv.slice(2), opt = k => { const i = a.indexOf(k); return i >= 0 ? a[i + 1] : undefined; };
   processRequests({configPath: opt('--config') ?? 'regions.json', outPath: opt('--out') ?? 'requested-regions.json'}).then(r => {
     console.log(JSON.stringify(r, null, 2));
+    console.log(`::notice::requests ${r.requests ?? 0}, rejected ${r.rejected ?? 0}, added ${(r.added ?? []).length}, resized ${(r.resized ?? []).length}, changed ${r.changed}${r.configured === false ? ' (not configured)' : ''}`);
     if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `changed=${r.changed}\n`);
-  }, e => { console.error('FAILED:', e.message); process.exitCode = 1; });
+  }, e => {
+    // GitHub shows "::error::" lines as annotations, readable without the full log; never print the CSV URL.
+    const msg = String(e?.message ?? e).replace(/https?:\/\/\S+/g, '<url>');
+    console.error(`::error::processRequests failed: ${msg}${e?.cause ? ` (cause: ${String(e.cause.message ?? e.cause).replace(/https?:\/\/\S+/g, '<url>')})` : ''}`);
+    process.exitCode = 1;
+  });
 }
