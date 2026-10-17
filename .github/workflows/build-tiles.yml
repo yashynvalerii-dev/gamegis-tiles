@@ -9,7 +9,7 @@ on:
     branches: [main]
     paths: ['src/**', 'tools/**', 'site-template/**', '.github/workflows/build-tiles.yml']
 permissions:
-  contents: read
+  contents: write
   pages: write
   id-token: write
 concurrency:
@@ -25,9 +25,23 @@ jobs:
         with:
           node-version: '24'
       - name: Download extracts (MD5 verified) and region boundaries
-        run: npm run download-extract -- --config regions.json
+        run: |
+          set -o pipefail
+          mkdir -p diag
+          npm run download-extract -- --config regions.json 2>&1 | tee diag/download.log
       - name: Export tile bundles for all regions
-        run: npm run export-tiles -- --config regions.json --out site
+        run: |
+          set -o pipefail
+          npm run export-tiles -- --config regions.json --out site 2>&1 | tee diag/export.log
+      - name: Publish diagnostics on failure (branch ci-diagnostics)
+        if: failure()
+        run: |
+          cp -r diag /tmp/diag; df -h > /tmp/diag/disk.txt; free -m > /tmp/diag/memory.txt
+          echo "run ${{ github.run_id }} commit ${{ github.sha }}" > /tmp/diag/RUN.txt
+          git config user.name "github-actions[bot]"; git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -f --orphan ci-diagnostics; git rm -rqf --cached . >/dev/null 2>&1 || true
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          cp /tmp/diag/* .; git add -A; git commit -qm "diagnostics for run ${{ github.run_id }}"; git push -f origin ci-diagnostics
       - name: Add landing page and summary
         run: |
           cp -r site-template/. site/
