@@ -35,9 +35,13 @@ export function isRailwayTags(tags = {}) {
   return active(tags, 'railway');
 }
 
+// military=* values that map LINES (obstacles), not territories.
+const LINEAR_MILITARY = new Set(['trench']);
+export const isLinearMilitary = (tags = {}) => LINEAR_MILITARY.has(value(tags, 'military'));
+
 export function isRestrictedAreaTags(tags = {}) {
   return ['industrial', 'military'].includes(value(tags, 'landuse')) ||
-    active(tags, 'military') ||
+    (active(tags, 'military') && !isLinearMilitary(tags)) ||
     ((value(tags, 'area') === 'yes' || isBuildingTags(tags) || isWaterTags(tags)) &&
       ['private', 'no'].includes(value(tags, 'access')));
 }
@@ -72,7 +76,7 @@ export function classifyWayTags(tags = {}) {
   if (isRailwayTags(tags)) classes.push('railway');
   if (isPowerWayTags(tags)) classes.push('power');
   if (isRestrictedAreaTags(tags)) classes.push('restricted_area');
-  else if (isRestrictedAccess(tags)) classes.push('restricted_way');
+  else if (isRestrictedAccess(tags) || isLinearMilitary(tags)) classes.push('restricted_way');
   return classes;
 }
 

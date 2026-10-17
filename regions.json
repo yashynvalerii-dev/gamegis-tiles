@@ -13,9 +13,12 @@
       "lon": "lon",
       "app": "app"
     },
-    "radiusKm": 15,
     "maxNewPerRun": 2,
-    "maxTotalRegions": 15
+    "maxTotalRegions": 15,
+    "budgetMB": 700,
+    "expireDays": 120,
+    "windowDays": 60,
+    "_comment_rating": "Rating = distinct days with requests/activity in windowDays; radius 3/7/12/20 km at 1/2/4/8 days; lowest-priority requested areas are evicted above budgetMB; inactive ones after expireDays. Pinned regions below are never changed."
   },
   "regions": [
     {

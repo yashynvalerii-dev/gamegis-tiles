@@ -65,7 +65,7 @@ export function runConfig(o, {log = console.log} = {}) {
     const model = loadRegionModel(pbf, {aoi, onProgress: m => log('  ' + m)});
     const {manifest, stats} = exportRegion({model, outDir: o.outDir, boundary, publish, bundleZoom: o.bundleZoom,
       writeManifest: false, onProgress: m => log('  ' + m)});
-    parts.push({id: r.id, name: r.name, manifest});
+    parts.push({id: r.id, name: r.name, manifest, kind: r.addedOn ? 'requested' : 'pinned', circle: r.publish?.circle ?? null});
     regionStats.push({id: r.id, seconds: (Date.now() - t) / 1000, ...stats, loadStats: model.stats});
     log(`  ${r.id}: bundles ${stats.bundles}, stored ${mb(stats.storedBytes ?? 0)}, READY ${stats.tiles.READY}, ` +
       `INCOMPLETE ${stats.tiles.INCOMPLETE} ${JSON.stringify(stats.incompleteReasons)} (${((Date.now() - t) / 1000).toFixed(0)} s)`);

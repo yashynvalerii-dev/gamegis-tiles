@@ -229,31 +229,64 @@ export function createTileClient({mirrors, fetchImpl = globalThis.fetch, timeout
   }
 
   const requested = new Set();
-  /**
-   * Asks for a new region when the player's area is not prepared. Sends only COARSE coordinates (~5 km)
-   * and the app id to the request form published in the manifest; nothing personal. Returns
-   * {sent: true, lat, lon} or {sent: false, reason: ALREADY_AVAILABLE | ALREADY_REQUESTED |
-   * REQUESTS_NOT_CONFIGURED | NETWORK_ERROR}. What the game shows meanwhile is the game's decision.
-   */
-  async function requestRegion({lat, lon, app}) {
-    if (typeof app !== 'string' || !/^[a-z][a-z0-9-]{1,40}$/.test(app)) throw new TypeError('app must be a short id like "radar-fox"');
-    const m = await getManifest();
-    const t = tileFor(lat, lon, m.bundleZoom);
-    if (m.bundles[`${m.bundleZoom}/${t.x}/${t.y}`]) return {sent: false, reason: 'ALREADY_AVAILABLE'};
+  const sendSignal = async (m, lat, lon, app) => {
     const rr = m.regionRequests;
-    if (!rr?.url || !/^https:\/\/docs\.google\.com\/forms\//.test(rr.url) || !rr.fields) return {sent: false, reason: 'REQUESTS_NOT_CONFIGURED'};
     const cLat = Math.round(lat * 20) / 20, cLon = Math.round(lon * 20) / 20;
-    const key = `${cLat}/${cLon}`;
-    if (requested.has(key)) return {sent: false, reason: 'ALREADY_REQUESTED'};
     const body = new URLSearchParams({[rr.fields.lat]: cLat.toFixed(2), [rr.fields.lon]: cLon.toFixed(2), [rr.fields.app]: app});
-    try {
-      // The form answers without CORS headers; the request is still recorded. The response is opaque by design.
-      await timedFetch(rr.url, {method: 'POST', mode: 'no-cors', body});
-    } catch { return {sent: false, reason: 'NETWORK_ERROR'}; }
+    // The form answers without CORS headers; the request is still recorded. The response is opaque by design.
+    await timedFetch(rr.url, {method: 'POST', mode: 'no-cors', body});
+    return {lat: cLat, lon: cLon};
+  };
+  const formReady = m => Boolean(m.regionRequests?.url && /^https:\/\/docs\.google\.com\/forms\//.test(m.regionRequests.url) && m.regionRequests.fields);
+  const checkApp = app => { if (typeof app !== 'string' || !/^[a-z][a-z0-9-]{1,40}$/.test(app)) throw new TypeError('app must be a short id like "radar-fox"'); };
+
+  /**
+   * Asks for map data around the player when it is missing (not prepared yet, or the player is near the
+   * edge of a prepared area). Sends only COARSE coordinates (~5 km) and the app id to the request form
+   * published in the manifest; nothing personal. Requests near an existing requested area raise its rating
+   * (it grows); far ones create a new small area. Returns {sent: true, lat, lon} or {sent: false, reason:
+   * ALREADY_AVAILABLE | ALREADY_REQUESTED | REQUESTS_NOT_CONFIGURED | NETWORK_ERROR}.
+   * What the game shows meanwhile is the game's decision.
+   */
+  async function requestRegion({lat, lon, app, radiusM = 1000}) {
+    checkApp(app);
+    const m = await getManifest();
+    const area = await getArea({lat, lon, radiusM});
+    if (area.status === 'READY') return {sent: false, reason: 'ALREADY_AVAILABLE'};
+    if (!formReady(m)) return {sent: false, reason: 'REQUESTS_NOT_CONFIGURED'};
+    const key = `${Math.round(lat * 20) / 20}/${Math.round(lon * 20) / 20}`;
+    if (requested.has(key)) return {sent: false, reason: 'ALREADY_REQUESTED'};
+    let c;
+    try { c = await sendSignal(m, lat, lon, app); } catch { return {sent: false, reason: 'NETWORK_ERROR'}; }
     requested.add(key);
-    log.push({event: 'region-request', lat: cLat, lon: cLon, app});
-    return {sent: true, lat: cLat, lon: cLon};
+    log.push({event: 'region-request', ...c, app});
+    return {sent: true, ...c};
   }
 
-  return {getManifest, getBundle, getArea, requestRegion, log};
+  /**
+   * "People play here": keeps an area prepared on request alive and lets it grow. Sends at most one signal
+   * per area per 24 h (remembered in localStorage when available), only inside areas that were built on
+   * request (manifest regions with kind "requested"). Call it when a game session starts.
+   * Returns {sent: true} or {sent: false, reason: NOT_IN_REQUESTED_AREA | ALREADY_TODAY | REQUESTS_NOT_CONFIGURED | NETWORK_ERROR}.
+   */
+  async function reportActivity({lat, lon, app, nowMs = Date.now()}) {
+    checkApp(app);
+    const m = await getManifest();
+    const region = (m.regions ?? []).find(r => r.kind === 'requested' && r.circle &&
+      Math.hypot((lat - r.circle.lat) * 111.32, (lon - r.circle.lon) * 111.32 * Math.cos(lat * Math.PI / 180)) <= r.circle.radiusKm);
+    if (!region) return {sent: false, reason: 'NOT_IN_REQUESTED_AREA'};
+    if (!formReady(m)) return {sent: false, reason: 'REQUESTS_NOT_CONFIGURED'};
+    const key = `gamegis-activity:${region.id}`;
+    let last = activity.get(key);
+    try { last ??= Number(globalThis.localStorage?.getItem(key)) || undefined; } catch {}
+    if (last && nowMs - last < 86400000) return {sent: false, reason: 'ALREADY_TODAY'};
+    try { await sendSignal(m, lat, lon, app); } catch { return {sent: false, reason: 'NETWORK_ERROR'}; }
+    activity.set(key, nowMs);
+    try { globalThis.localStorage?.setItem(key, String(nowMs)); } catch {}
+    log.push({event: 'activity', region: region.id, app});
+    return {sent: true, region: region.id};
+  }
+  const activity = new Map();
+
+  return {getManifest, getBundle, getArea, requestRegion, reportActivity, log};
 }

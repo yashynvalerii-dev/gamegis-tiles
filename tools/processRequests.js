@@ -10,7 +10,7 @@
 import {readFileSync, writeFileSync, existsSync, appendFileSync} from 'node:fs';
 import {resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {readRequests, planRegions} from '../src/requests/regionRequests.js';
+import {readRequests, planDemand} from '../src/requests/regionRequests.js';
 import {tileFor} from '../src/client/gamegis-client.js';
 
 const UA = {'user-agent': 'GameGIS-Broker/0.1 region-requests'};
@@ -35,21 +35,24 @@ export async function processRequests({configPath = 'regions.json', outPath = 'r
   const csv = await (await get(csvUrl, 'requests CSV')).text();
   const {requests, rejected} = readRequests(csv, {columns: s.columns, apps});
 
-  let bundles = {};
+  let bundles = {}, report = null;
   const site = siteUrl ?? s.siteUrl;
-  if (site) bundles = (await (await get(new URL('manifest.json', site).href, 'manifest')).json()).bundles ?? {};
+  if (site) {
+    bundles = (await (await get(new URL('manifest.json', site).href, 'manifest')).json()).bundles ?? {};
+    try { report = await (await get(new URL('export-report.json', site).href, 'export report')).json(); } catch { report = null; }
+  }
   const isPublished = p => { const t = tileFor(p.lat, p.lon, 13); return Boolean(bundles[`13/${t.x}/${t.y}`]); };
+  const sizesMB = Object.fromEntries((report?.regions ?? []).map(r => [r.id, (r.storedBytes ?? 0) / 1048576]));
+  const pinnedMB = config.regions.reduce((a, r) => a + (sizesMB[r.id] ?? 0), 0);
 
   const index = await (await get('https://download.geofabrik.de/index-v1.json', 'Geofabrik index')).json();
-  const {added, skipped} = planRegions(requests, [...config.regions, ...requested.regions], index, {
-    radiusKm: s.radiusKm ?? 15, maxNewPerRun: s.maxNewPerRun ?? 2, maxTotalRegions: s.maxTotalRegions ?? 15, isPublished, now});
-  if (added.length) {
-    requested.regions.push(...added);
-    requested.updatedAt = now.toISOString();
-    writeFileSync(outPath, JSON.stringify(requested, null, 2) + '\n');
-  }
-  const reasons = skipped.reduce((a, x) => { a[x.reason] = (a[x.reason] ?? 0) + 1; return a; }, {});
-  return {configured: true, changed: added.length > 0, requests: requests.length, rejected, added: added.map(r => ({id: r.id, extract: r.extract})), skipped: reasons};
+  const {regions, changes} = planDemand(requests, config.regions, requested.regions, index, {
+    maxNewPerRun: s.maxNewPerRun ?? 2, maxTotalRegions: s.maxTotalRegions ?? 15, budgetMB: s.budgetMB ?? 700,
+    expireDays: s.expireDays ?? 120, windowDays: s.windowDays ?? 60, sizesMB, pinnedMB, isPublished, now});
+  const changed = JSON.stringify(regions) !== JSON.stringify(requested.regions);
+  if (changed) writeFileSync(outPath, JSON.stringify({regions, updatedAt: now.toISOString()}, null, 2) + '\n');
+  return {configured: true, changed, requests: requests.length, rejected, ...changes,
+    regions: regions.map(r => ({id: r.id, radiusKm: r.publish.circle.radiusKm, rating: r.rating, extract: r.extract}))};
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

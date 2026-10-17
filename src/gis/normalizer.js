@@ -11,7 +11,7 @@ import { assertPosition, pointInPolygon } from './geometry.js';
 import { classifyWayTags, isEntranceTags, isPowerPointTags, requiresRelationSupport } from './classifier.js';
 
 export const DATASET_ID = 'OSM_MVP_BASE_V1'; // layer set is identified by NORMALIZATION_VERSION (V3 adds POWER)
-export const NORMALIZATION_VERSION = 'OSM_NORMALIZER_V3'; // V2: multipolygons; V3: power layer + tag allowlist
+export const NORMALIZATION_VERSION = 'OSM_NORMALIZER_V4'; // V2: multipolygons; V3: power + tag allowlist; V4: site perimeters, linear military, building-on-road fix
 export const PROCESSED_LAYERS = Object.freeze([
   'WALKABLE', 'BUILDINGS', 'ENTRANCES', 'WATER', 'RAILWAYS', 'POWER',
 ]);
@@ -182,17 +182,18 @@ function memberCoordinates(member, wayById, nodes) {
  * Builds Polygon/MultiPolygon coordinates from an OSM multipolygon relation.
  * Fails closed on missing members, open rings, nested relations or orphan inner rings.
  */
-export function assembleMultipolygon(relation, wayById, nodes) {
+export function assembleMultipolygon(relation, wayById, nodes, { outerRoles = ['outer', ''] } = {}) {
   const members = Array.isArray(relation.members) ? relation.members : [];
   const outerPieces = [], innerPieces = [];
   for (const m of members) {
     if (m?.type === 'relation') return { error: 'MULTIPOLYGON_NESTED_RELATION_NOT_SUPPORTED' };
     if (m?.type !== 'way') continue;
     const role = typeof m.role === 'string' ? m.role : '';
-    if (role !== 'outer' && role !== 'inner' && role !== '') continue;
+    const isOuter = outerRoles.includes(role);
+    if (!isOuter && role !== 'inner') continue;
     const geo = memberCoordinates(m, wayById, nodes);
     if (geo.error) return geo;
-    (role === 'inner' ? innerPieces : outerPieces).push(geo.coordinates);
+    (isOuter ? outerPieces : innerPieces).push(geo.coordinates);
   }
   if (!outerPieces.length) return { error: 'MULTIPOLYGON_MEMBER_GEOMETRY_MISSING' };
   const outer = assembleRings(outerPieces);
@@ -308,6 +309,11 @@ export function normalizeOsmMvpBase(payload, { provider } = {}) {
     normalizedWayCount++;
     for (const featureClass of classes) {
       if (POLYGON_CLASSES.has(featureClass) && !isValidClosedRing(positions)) {
+        // An open road cannot be a building: a building tag on it is a mapping mistake, the road itself stays.
+        if (featureClass === 'building' && way.tags?.highway) {
+          warnings.push({ code: 'BUILDING_TAG_ON_OPEN_ROAD_IGNORED', sourceType: 'way', sourceId: way.id });
+          continue;
+        }
         errors.push({ code: 'INVALID_OR_OPEN_POLYGON_WAY', sourceType: 'way', sourceId: way.id,
           featureClass });
         continue;
@@ -325,8 +331,11 @@ export function normalizeOsmMvpBase(payload, { provider } = {}) {
   for (const relation of relations) {
     const type = String(relation.tags?.type ?? '').trim().toLowerCase();
     const classes = classifyWayTags(relation.tags);
-    if (type === 'multipolygon' && classes.length) {
-      const mp = assembleMultipolygon(relation, wayById, nodes);
+    // type=site with "perimeter" members (e.g. a port) describes its area by that perimeter.
+    const isSiteArea = type === 'site' && (relation.members ?? []).some((m) => m?.role === 'perimeter');
+    if ((type === 'multipolygon' || isSiteArea) && classes.length) {
+      const mp = assembleMultipolygon(relation, wayById, nodes,
+        isSiteArea ? { outerRoles: ['perimeter'] } : undefined);
       if (mp.error) {
         errors.push({ code: mp.error, sourceType: 'relation', sourceId: relation.id });
         continue;

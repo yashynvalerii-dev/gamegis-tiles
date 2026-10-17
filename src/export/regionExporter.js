@@ -378,12 +378,12 @@ export function circleRegion({lat, lon, radiusKm}, vertices = 72) {
 export function mergeManifests(parts, generatedAt = new Date().toISOString()) {
   if (!parts.length) throw new Error('NO_REGIONS');
   const merged = {...parts[0].manifest, generatedAt, bundles: {}, regions: []};
-  for (const {id, name, manifest} of parts) {
+  for (const {id, name, manifest, kind = 'pinned', circle = null} of parts) {
     for (const [k, v] of Object.entries(manifest.bundles)) {
       if (merged.bundles[k]) throw new Error(`BUNDLE_COLLISION ${k} (regions overlap: ${id})`);
       merged.bundles[k] = v;
     }
-    merged.regions.push({id, name, dataTimestamp: manifest.dataTimestamp, bundles: Object.keys(manifest.bundles).length,
+    merged.regions.push({id, name, kind, ...(circle ? {circle} : {}), dataTimestamp: manifest.dataTimestamp, bundles: Object.keys(manifest.bundles).length,
       readyTiles: Object.values(manifest.bundles).reduce((a, b) => a + b.readyTiles, 0)});
   }
   // The site is as fresh as its oldest region.
