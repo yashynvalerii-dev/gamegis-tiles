@@ -46,6 +46,7 @@ export function readRequests(csvText, {columns = {lat: 'lat', lon: 'lon', app: '
   const head = rows[0].map(h => h.trim().toLowerCase());
   const idx = k => head.indexOf(String(columns[k]).toLowerCase());
   const [iLat, iLon, iApp, iAt] = [idx('lat'), idx('lon'), idx('app'), head.findIndex(h => /timestamp|zeitstempel|отметка/.test(h))];
+  const iPrec = head.indexOf('precision');
   if (iLat < 0 || iLon < 0 || iApp < 0) throw new Error(`REQUESTS_CSV_COLUMNS_MISSING (have: ${head.join(', ')})`);
   const requests = []; let rejected = 0;
   for (const r of rows.slice(1)) {
@@ -54,7 +55,9 @@ export function readRequests(csvText, {columns = {lat: 'lat', lon: 'lon', app: '
     if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 80 || Math.abs(lon) > 180 ||
         (apps.length && !apps.includes(app))) { rejected++; continue; }
     // Never trust client precision: keep requests coarse (~5 km) regardless of what was submitted.
-    requests.push({lat: Math.round(lat * 20) / 20, lon: Math.round(lon * 20) / 20, app, at: iAt >= 0 ? String(r[iAt]).trim() : ''});
+    const p = iPrec >= 0 ? Number(r[iPrec]) : 5;
+    requests.push({lat: Math.round(lat * 20) / 20, lon: Math.round(lon * 20) / 20, app, at: iAt >= 0 ? String(r[iAt]).trim() : '',
+      precision: [5, 6, 7].includes(p) ? p : 5});
   }
   return {requests, rejected};
 }

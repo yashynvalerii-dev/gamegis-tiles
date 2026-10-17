@@ -265,8 +265,12 @@ const featureBoxIntersects = (f, b) => f.bbox.minLon <= b.east && f.bbox.maxLon 
  * Exports every bundle that intersects the region boundary.
  * boundary: object from polyFile.makeRegion/parsePoly; when absent the extract header bbox is used.
  */
-/** Decimal places of published coordinates: 6 = ~11 cm (OSM itself stores 7, ~1 cm; games do not need it). */
-export const COORD_DECIMALS = 6;
+/**
+ * Decimal places of published coordinates. Base layer: 5 (~1 m, the accuracy of phone GPS and of OSM mapping itself).
+ * Precise layers (6 ~10 cm, 7 ~1 cm = everything OSM stores) are built only where clients ask for them.
+ */
+export const COORD_DECIMALS = 5;
+export const PRECISION_LEVELS = Object.freeze([5, 6, 7]);
 /** Rounds positions; consecutive positions that become equal are merged (rings stay explicitly closed). */
 export function roundGeometry(geometry, decimals = COORD_DECIMALS) {
   if (decimals >= 7) return geometry;

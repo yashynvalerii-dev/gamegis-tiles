@@ -242,12 +242,12 @@ export function createTileClient({mirrors, fetchImpl = globalThis.fetch, timeout
 
   const requested = new Set();
   const trusted = [...TRUSTED_REQUEST_ENDPOINTS, ...requestEndpoints];
-  const sendSignal = async (m, lat, lon, app, kind) => {
+  const sendSignal = async (m, lat, lon, app, kind, precision) => {
     const cLat = Math.round(lat * 20) / 20, cLon = Math.round(lon * 20) / 20;
     // text/plain keeps it a "simple" request (no CORS preflight); the answer is readable JSON.
     const res = await timedFetch(m.regionRequests.url, {method: 'POST', redirect: 'follow',
       headers: {'content-type': 'text/plain;charset=utf-8'},
-      body: JSON.stringify({v: 1, kind, lat: Number(cLat.toFixed(2)), lon: Number(cLon.toFixed(2)), app})});
+      body: JSON.stringify({v: 1, kind, lat: Number(cLat.toFixed(2)), lon: Number(cLon.toFixed(2)), app, ...(precision > 5 ? {precision} : {})})});
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const answer = await res.json();
     return {lat: cLat, lon: cLon, ok: answer?.ok === true, status: String(answer?.status ?? 'UNKNOWN')};
@@ -262,18 +262,21 @@ export function createTileClient({mirrors, fetchImpl = globalThis.fetch, timeout
    * published in the manifest; nothing personal. Requests near an existing requested area raise its rating
    * (it grows); far ones create a new small area. Returns {sent: true, lat, lon} or {sent: false, reason:
    * ALREADY_AVAILABLE | ALREADY_REQUESTED | REQUESTS_NOT_CONFIGURED | NETWORK_ERROR | RATE_LIMITED | FULL | INVALID}.
-   * What the game shows meanwhile is the game's decision.
+   * precision: 5 (default, ~1 m) | 6 (~10 cm) | 7 (~1 cm) decimal places the game needs in this sector — a
+   * provisional rule (2026-10-17), to be confirmed by practice. What the game shows meanwhile is the game's decision.
    */
-  async function requestRegion({lat, lon, app, radiusM = 1000}) {
+  async function requestRegion({lat, lon, app, radiusM = 1000, precision = 5}) {
     checkApp(app);
+    if (![5, 6, 7].includes(precision)) throw new TypeError('precision must be 5, 6 or 7 decimal places');
     const m = await getManifest();
     const area = await getArea({lat, lon, radiusM});
-    if (area.status === 'READY') return {sent: false, reason: 'ALREADY_AVAILABLE'};
+    // precise layers (6/7 decimals) are built only on request, so a READY base area does not answer them
+    if (precision === 5 && area.status === 'READY') return {sent: false, reason: 'ALREADY_AVAILABLE'};
     if (!endpointReady(m)) return {sent: false, reason: 'REQUESTS_NOT_CONFIGURED'};
-    const key = `${Math.round(lat * 20) / 20}/${Math.round(lon * 20) / 20}`;
+    const key = `${Math.round(lat * 20) / 20}/${Math.round(lon * 20) / 20}/${precision}`;
     if (requested.has(key)) return {sent: false, reason: 'ALREADY_REQUESTED'};
     let c;
-    try { c = await sendSignal(m, lat, lon, app, 'request'); } catch { return {sent: false, reason: 'NETWORK_ERROR'}; }
+    try { c = await sendSignal(m, lat, lon, app, 'request', precision); } catch { return {sent: false, reason: 'NETWORK_ERROR'}; }
     if (!c.ok) return {sent: false, reason: c.status};
     requested.add(key);
     log.push({event: 'region-request', lat: c.lat, lon: c.lon, status: c.status, app});
