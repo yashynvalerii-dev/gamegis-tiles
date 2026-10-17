@@ -33,6 +33,16 @@ export function tileFor(lat, lon, z) {
   return {z, x: Math.min(n - 1, Math.max(0, x)), y: Math.min(n - 1, Math.max(0, y))};
 }
 
+/** All tiles at zoom z intersecting a {south, west, north, east} box (e.g. a Geohash cell). */
+export function tilesForBbox({south, west, north, east}, z) {
+  if (![south, west, north, east].every(Number.isFinite) || south >= north || west >= east) throw new RangeError('bbox must be {south<north, west<east}');
+  if ((north - south) > 0.5 || (east - west) > 0.8) throw new RangeError('bbox too large (max ~50 km)');
+  const nw = tileFor(north, west, z), se = tileFor(south, east, z);
+  const out = [];
+  for (let x = nw.x; x <= se.x; x++) for (let y = nw.y; y <= se.y; y++) out.push({z, x, y});
+  return out;
+}
+
 /** All tiles at zoom z whose square intersects the circle's bounding box (a safe superset). */
 export function tilesForCircle({lat, lon, radiusM}, z) {
   if (!(radiusM > 0) || radiusM > 20000) throw new RangeError('radiusM must be 1..20000');
@@ -185,14 +195,14 @@ export function createTileClient({mirrors, fetchImpl = globalThis.fetch, timeout
   }
 
   /**
-   * Features for a circle. status: READY (every z15 tile READY), PARTIAL (some READY) or UNAVAILABLE.
+   * Features for a circle ({lat, lon, radiusM}) or a box ({bbox: {south, west, north, east}}). status: READY (every z15 tile READY), PARTIAL (some READY) or UNAVAILABLE.
    * tiles: { "15/x/y": {status, reason?} } — MISSING means the area has not been prepared yet.
    * data: feature groups merged from READY tiles' bundles (features may extend beyond the circle).
    */
-  async function getArea({lat, lon, radiusM}) {
+  async function getArea({lat, lon, radiusM, bbox} = {}) {
     const m = await getManifest();
     const tz = m.tileZoom, bz = m.bundleZoom, shift = tz - bz;
-    const tiles = tilesForCircle({lat, lon, radiusM}, tz);
+    const tiles = bbox ? tilesForBbox(bbox, tz) : tilesForCircle({lat, lon, radiusM}, tz);
     const keys = [...new Set(tiles.map(t => `${bz}/${t.x >> shift}/${t.y >> shift}`))];
     const bundles = new Map();
     for (const k of keys) bundles.set(k, await getBundle(k)); // sequential: gentle on free hosting
