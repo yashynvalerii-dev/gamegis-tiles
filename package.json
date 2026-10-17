@@ -1,0 +1,12 @@
+{
+  "name": "gamegis-tiles",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Static OpenStreetMap tile bundles built by the GameGIS Broker pipeline",
+  "engines": {"node": ">=24.15.0"},
+  "scripts": {
+    "download-extract": "node tools/downloadExtract.js",
+    "export-tiles": "node --max-old-space-size=6144 tools/exportTiles.js"
+  }
+}

@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GameGIS Tiles</title>
+<style>
+  :root { --bg:#fbfbf9; --fg:#1d1d1b; --muted:#66655f; --line:#e3e2dc; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#151514; --fg:#ecebe6; --muted:#a3a29b; --line:#33322f; } }
+  body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.55 system-ui, sans-serif; }
+  main { max-width:640px; margin:0 auto; padding:40px 16px; }
+  h1 { font-size:1.5rem; margin:0 0 8px; }
+  p, li { color:var(--muted); }
+  code { background:var(--line); padding:1px 5px; border-radius:4px; font-size:.9em; }
+  #stats { border-top:1px solid var(--line); margin-top:24px; padding-top:16px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>GameGIS Tiles</h1>
+  <p>Static, pre-processed OpenStreetMap geodata for client applications: buildings (with courtyards),
+     walkways, entrances, water, railways and restricted areas, grouped into small bundles.</p>
+  <ul>
+    <li>Index: <code>manifest.json</code></li>
+    <li>Bundles: <code>bundles/13/{x}/{y}.json</code> (Web Mercator z13; each holds 16 z15 tiles with a READY/INCOMPLETE status)</li>
+  </ul>
+  <p>Map data © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>,
+     available under the Open Database License (ODbL 1.0). Extract by Geofabrik GmbH.</p>
+  <div id="stats"></div>
+</main>
+<script>
+  fetch('manifest.json').then(r => r.json()).then(m => {
+    const n = Object.keys(m.bundles).length;
+    document.getElementById('stats').textContent =
+      `Data as of ${m.dataTimestamp.slice(0, 16).replace('T', ' ')} UTC · ${n} bundles · built ${m.generatedAt.slice(0, 10)}`;
+  }).catch(() => {});
+</script>
+</body>
+</html>

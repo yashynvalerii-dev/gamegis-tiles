@@ -1,0 +1,2 @@
+Generated from the private GameGIS Broker repository, commit 61de037cff7c822bd5a84f9aa1e6372c1539165e.
+Do not edit here; changes are overwritten on the next sync.
