@@ -2,7 +2,7 @@
   "_comment": "Regions published as static tiles. extract = Geofabrik path of the source extract (its .poly marks where data is complete); publish = which area to publish: a Geofabrik .poly path or a circle.",
   "regionRequests": {
     "_comment": "Games send region requests and activity to the request endpoint (contract v1 in src/client/gamegis-client.js; today a Google Apps Script web app, see service/requests-endpoint). Its address is public. The list of collected signals is read through the REQUESTS_CSV_URL secret of the tiles repository (endpoint address + read key), never stored here.",
-    "endpoint": "",
+    "endpoint": "https://script.google.com/macros/s/AKfycbx9YiTfoAG23FbaOUdb2w2fUDbFwSwrmAmmbVAtWkF-Dr3v-WENleRy97QdzCa-Oo3SrA/exec",
     "columns": {
       "lat": "lat",
       "lon": "lon",
