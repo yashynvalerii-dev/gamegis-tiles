@@ -49,8 +49,7 @@ export async function processRequests({configPath = 'regions.json', outPath = 'r
   const index = await (await get('https://download.geofabrik.de/index-v1.json', 'Geofabrik index')).json();
   const {regions, changes} = planDemand(requests, config.regions, requested.regions, index, {
     maxNewPerRun: s.maxNewPerRun ?? 2, maxTotalRegions: s.maxTotalRegions ?? 15, budgetMB: s.budgetMB ?? 700,
-    expireDays: s.expireDays ?? 120, windowDays: s.windowDays ?? 60, sizesMB, pinnedMB, isPublished, now,
-    ...pick(s, ['minRadiusKm', 'maxRadiusKm', 'marginKm', 'reachKm', 'growAfterDays'])});
+    sizesMB, pinnedMB, isPublished, now, ...pick(s, ['windowDays', 'activityDays', 'minRadiusKm', 'maxRadiusKm', 'marginKm', 'reachKm'])});
   const changed = JSON.stringify(regions) !== JSON.stringify(requested.regions);
   if (changed) writeFileSync(outPath, JSON.stringify({regions, updatedAt: now.toISOString()}, null, 2) + '\n');
   return {configured: true, changed, requests: requests.length, rejected, ...changes,
