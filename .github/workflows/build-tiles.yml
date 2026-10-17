@@ -31,6 +31,7 @@ jobs:
       - name: Add landing page and summary
         run: |
           cp -r site-template/. site/
+          cp src/client/gamegis-client.js site/
           node -e "
             const r=require('./site/export-report.json');
             const mb=b=>(b/1048576).toFixed(1)+' MB';

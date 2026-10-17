@@ -17,6 +17,18 @@ The build runs here in GitHub Actions every week: it downloads the regional extr
 
 A missing bundle means the area has not been prepared yet.
 
+### Ready-made client
+
+`gamegis-client.js` (published at the site root) does all of the above: mirror failover,
+SHA-256 check, gzip, per-tile status and optional offline cache. Copy it into the application.
+
+```js
+import {createTileClient} from './gamegis-client.js';
+const tiles = createTileClient({mirrors: ['https://yashynvalerii-dev.github.io/gamegis-tiles/']});
+const area = await tiles.getArea({lat: 51.0102, lon: 11.0036, radiusM: 500});
+// area.status: READY | PARTIAL | UNAVAILABLE; area.tiles["15/x/y"].status; area.data.buildings ...
+```
+
 ## License and attribution
 
 Map data © OpenStreetMap contributors, Open Database License (ODbL 1.0); extracts by Geofabrik GmbH.
