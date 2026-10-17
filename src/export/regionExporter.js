@@ -22,6 +22,7 @@ import {segmentIntersectsBox} from '../gis/bbox.js';
 import {classifyWayTags, isPointFeatureTags, requiresRelationSupport} from '../gis/classifier.js';
 import {normalizeOsmMvpBase, DATASET_ID, NORMALIZATION_VERSION} from '../gis/normalizer.js';
 import {tileForPoint, boundsForTile, tileId, bboxContainsBbox} from '../core/tileGrid.js';
+import {makeRegion} from '../providers/polyFile.js';
 
 export const BUNDLE_FORMAT = 'GAMEGIS_TILE_BUNDLE_V2'; // V2: power group, published tag allowlist
 export const MANIFEST_FORMAT = 'GAMEGIS_TILE_MANIFEST_V2'; // V2: gzip-stored bundles
@@ -55,7 +56,12 @@ function lowerBound(sorted, v) {
  *   relations: relevant multipolygon-ish relations with member way indexes
  *   entrances: tagged entrance nodes
  */
-export function loadRegionModel(pbfPath, {onProgress = () => {}} = {}) {
+export function loadRegionModel(pbfPath, {onProgress = () => {}, aoi = null} = {}) {
+  return aoi ? loadAreaModel(pbfPath, aoi, onProgress) : loadWholeModel(pbfPath, onProgress);
+}
+
+/** Whole extract (small regions such as one German state). */
+function loadWholeModel(pbfPath, onProgress) {
   onProgress('pass 1/3: relations');
   const relations = [];
   const memberWayIds = new Set();
@@ -68,33 +74,97 @@ export function loadRegionModel(pbfPath, {onProgress = () => {}} = {}) {
   });
 
   onProgress(`pass 2/3: ways (${relations.length} relevant relations, ${memberWayIds.size} member ways)`);
-  const wayIds = new F64(), refStart = new F64(), refs = new F64();
-  const wayTags = [], wayRelevant = [];
+  const acc = newWayAccumulator();
   scanPbf(pbfPath, {
     way(id, wayRefs, tags) {
       const relevant = isRelevantWay(tags);
       if (!relevant && !memberWayIds.has(id)) return;
-      wayIds.push(id); refStart.push(refs.n); wayTags.push(tags); wayRelevant.push(relevant);
-      for (const r of wayRefs) refs.push(r);
+      acc.add(id, wayRefs, tags, relevant);
     },
   });
-  refStart.push(refs.n);
+  onProgress(`pass 3/3: nodes (${acc.count()} ways, ${acc.refs.n} node references)`);
+  const entrances = [];
+  const coords = resolveNodes(pbfPath, acc, (id, la, lo, tags) => { if (isPointFeatureTags(tags)) entrances.push({id, lat: la, lon: lo, tags}); });
+  return finishModel(header, acc, coords, relations, entrances);
+}
 
-  onProgress(`pass 3/3: nodes (${wayTags.length} ways, ${refs.n} node references)`);
-  const sortedRefs = Float64Array.from(refs.view()).sort();
+/**
+ * Only the area of interest {south, west, north, east} of a large extract (e.g. Germany around Thuringia,
+ * Ukraine around a city). Keeps ways touching the area plus complete member ways of touching relations,
+ * so features crossing the area edge keep their full geometry.
+ */
+function loadAreaModel(pbfPath, aoi, onProgress) {
+  onProgress('pass 1/4: nodes inside the area, point features, relations');
+  const inArea = new F64();
+  const entrances = [];
+  const allRelations = [];
+  const memberWayIds = new Set();
+  const header = scanPbf(pbfPath, {
+    node(id, la, lo, tags) {
+      if (la < aoi.south || la > aoi.north || lo < aoi.west || lo > aoi.east) return;
+      inArea.push(id);
+      if (isPointFeatureTags(tags)) entrances.push({id, lat: la, lon: lo, tags});
+    },
+    relation(id, members, tags) {
+      if (!isRelevantRelation(tags)) return;
+      allRelations.push({id, members, tags});
+      for (const m of members) if (m.type === 'way') memberWayIds.add(m.ref);
+    },
+  });
+  const areaIds = inArea.view().sort();
+  const isInArea = id => { const i = lowerBound(areaIds, id); return i < areaIds.length && areaIds[i] === id; };
+
+  onProgress(`pass 2/4: ways touching the area (${areaIds.length} nodes inside)`);
+  const acc = newWayAccumulator();
+  const kept = new Set();
+  scanPbf(pbfPath, {
+    way(id, wayRefs, tags) {
+      const relevant = isRelevantWay(tags);
+      if (!relevant && !memberWayIds.has(id)) return;
+      if (!wayRefs.some(isInArea)) return;
+      acc.add(id, wayRefs, tags, relevant); kept.add(id);
+    },
+  });
+  const relations = allRelations.filter(r => r.members.some(m => m.type === 'way' && kept.has(m.ref)));
+  const missing = new Set();
+  for (const r of relations) for (const m of r.members) if (m.type === 'way' && !kept.has(m.ref)) missing.add(m.ref);
+  if (missing.size) {
+    onProgress(`pass 3/4: ${missing.size} member ways of ${relations.length} relations reaching outside the area`);
+    scanPbf(pbfPath, {way(id, wayRefs, tags) { if (missing.has(id)) acc.add(id, wayRefs, tags, isRelevantWay(tags)); }});
+  }
+  onProgress(`pass 4/4: node coordinates (${acc.count()} ways, ${acc.refs.n} node references)`);
+  const coords = resolveNodes(pbfPath, acc, null);
+  return finishModel(header, acc, coords, relations, entrances);
+}
+
+function newWayAccumulator() {
+  const ids = new F64(), refStart = new F64(), refs = new F64();
+  const tags = [], relevant = [];
+  return {ids, refStart, refs, tags, relevant,
+    add(id, wayRefs, t, rel) { ids.push(id); refStart.push(refs.n); tags.push(t); relevant.push(rel); for (const r of wayRefs) refs.push(r); },
+    count() { return tags.length; }};
+}
+
+/** One pass over nodes: coordinates for every referenced node (sorted unique ids + parallel lat/lon). */
+function resolveNodes(pbfPath, acc, onNode) {
+  const sortedRefs = Float64Array.from(acc.refs.view()).sort();
   let u = 0;
   for (let k = 0; k < sortedRefs.length; k++) if (k === 0 || sortedRefs[k] !== sortedRefs[k - 1]) sortedRefs[u++] = sortedRefs[k];
   const needed = sortedRefs.subarray(0, u);
   const lat = new Float64Array(needed.length).fill(NaN), lon = new Float64Array(needed.length).fill(NaN);
-  const entrances = [];
   scanPbf(pbfPath, {
     node(id, la, lo, tags) {
       const i = lowerBound(needed, id);
       if (i < needed.length && needed[i] === id) { lat[i] = la; lon[i] = lo; }
-      if (isPointFeatureTags(tags)) entrances.push({id, lat: la, lon: lo, tags});
+      if (onNode) onNode(id, la, lo, tags);
     },
   });
+  return {needed, lat, lon};
+}
 
+function finishModel(header, acc, {needed, lat, lon}, relations, entrances) {
+  acc.refStart.push(acc.refs.n);
+  const wayTags = acc.tags, wayRelevant = acc.relevant, refStart = acc.refStart, refs = acc.refs, wayIds = acc.ids;
   // Resolve every way's coordinates and bbox once.
   const R = refs.view(), S = refStart.view();
   const wayCount = wayTags.length;
@@ -195,15 +265,17 @@ const featureBoxIntersects = (f, b) => f.bbox.minLon <= b.east && f.bbox.maxLon 
  * Exports every bundle that intersects the region boundary.
  * boundary: object from polyFile.makeRegion/parsePoly; when absent the extract header bbox is used.
  */
-export function exportRegion({model, outDir, boundary, bundleZoom = 13, bufferM = 40, onProgress = () => {},
-  generatedAt = new Date().toISOString()}) {
+export function exportRegion({model, outDir, boundary, publish = null, bundleZoom = 13, bufferM = 40, onProgress = () => {},
+  generatedAt = new Date().toISOString(), writeManifest = true}) {
   if (bundleZoom > TILE_ZOOM || bundleZoom < 10) throw new RangeError('bundleZoom must be 10..15');
   const started = Date.now();
   const header = model.header;
   if (!Number.isSafeInteger(header.replicationTimestamp) || header.replicationTimestamp <= 0) throw new Error('EXTRACT_TIMESTAMP_MISSING');
   const dataTimestamp = new Date(header.replicationTimestamp * 1000).toISOString();
-  const area = boundary?.bbox ?? header.bbox;
+  // boundary: where the extract is complete; publish: which tiles to publish (defaults to the boundary).
+  const area = publish?.bbox ?? boundary?.bbox ?? header.bbox;
   if (!area) throw new Error('EXTRACT_BOUNDS_UNKNOWN');
+  const published = publish ? box => publish.classifyBox(box) !== 'OUTSIDE' : () => true;
   const classify = boundary ? box => boundary.classifyBox(box)
     : box => (bboxContainsBbox(header.bbox, box) ? 'INSIDE' : (intersects(header.bbox, box) ? 'PARTIAL' : 'OUTSIDE'));
 
@@ -231,6 +303,7 @@ export function exportRegion({model, outDir, boundary, bundleZoom = 13, bufferM 
       for (let dx = 0; dx < side; dx++) for (let dy = 0; dy < side; dy++) {
         const tile = {z: TILE_ZOOM, x: bx * side + dx, y: by * side + dy};
         const scope = buildOverpassQuery({tile, bufferM}).bbox;
+        if (!published(boundsForTile(tile))) continue;
         const where = classify(scope);
         if (where === 'OUTSIDE') continue;
         anyTile = true;
@@ -279,11 +352,41 @@ export function exportRegion({model, outDir, boundary, bundleZoom = 13, bufferM 
       if (Date.now() - lastLog > 10000) { lastLog = Date.now(); onProgress(`bundles ${visited}/${totalBundles} scanned, ${stats.bundles} written`); }
     }
   }
-  const manifestBytes = Buffer.from(JSON.stringify(manifest), 'utf8');
-  writeFileSync(join(outDir, 'manifest.json'), manifestBytes);
-  stats.files++; stats.bytes += manifestBytes.length; stats.gzipBytes += gzipSync(manifestBytes).length;
-  stats.storedBytes = (stats.storedBytes ?? 0) + manifestBytes.length;
-  stats.manifestBytes = manifestBytes.length;
+  if (writeManifest) {
+    const manifestBytes = Buffer.from(JSON.stringify(manifest), 'utf8');
+    writeFileSync(join(outDir, 'manifest.json'), manifestBytes);
+    stats.files++; stats.bytes += manifestBytes.length; stats.gzipBytes += gzipSync(manifestBytes).length;
+    stats.storedBytes = (stats.storedBytes ?? 0) + manifestBytes.length;
+    stats.manifestBytes = manifestBytes.length;
+  }
   stats.durationMs = Date.now() - started;
   return {manifest, stats};
+}
+
+/** Approximates a circle as a closed polygon region (for publishing "N km around a point"). */
+export function circleRegion({lat, lon, radiusKm}, vertices = 72) {
+  const pts = [];
+  for (let i = 0; i <= vertices; i++) {
+    const a = (i % vertices) / vertices * 2 * Math.PI;
+    const dLat = radiusKm / 111.32 * Math.cos(a), dLon = radiusKm / (111.32 * Math.cos(lat * Math.PI / 180)) * Math.sin(a);
+    pts.push([lon + dLon, lat + dLat]);
+  }
+  return makeRegion([{hole: false, points: pts}]);
+}
+
+/** Merges per-region manifests into one site manifest. Bundle keys must not collide. */
+export function mergeManifests(parts, generatedAt = new Date().toISOString()) {
+  if (!parts.length) throw new Error('NO_REGIONS');
+  const merged = {...parts[0].manifest, generatedAt, bundles: {}, regions: []};
+  for (const {id, name, manifest} of parts) {
+    for (const [k, v] of Object.entries(manifest.bundles)) {
+      if (merged.bundles[k]) throw new Error(`BUNDLE_COLLISION ${k} (regions overlap: ${id})`);
+      merged.bundles[k] = v;
+    }
+    merged.regions.push({id, name, dataTimestamp: manifest.dataTimestamp, bundles: Object.keys(manifest.bundles).length,
+      readyTiles: Object.values(manifest.bundles).reduce((a, b) => a + b.readyTiles, 0)});
+  }
+  // The site is as fresh as its oldest region.
+  merged.dataTimestamp = merged.regions.map(r => r.dataTimestamp).sort()[0];
+  return merged;
 }

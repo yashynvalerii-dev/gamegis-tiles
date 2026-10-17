@@ -1,8 +1,9 @@
 # GameGIS Tiles
 
 Static, pre-processed OpenStreetMap data published on GitHub Pages for client applications.
-The build runs here in GitHub Actions every week: it downloads the regional extract from
-[Geofabrik](https://download.geofabrik.de/), verifies it, and cuts it into small JSON bundles.
+The build runs here in GitHub Actions every week: it downloads the extracts listed in `regions.json` from
+[Geofabrik](https://download.geofabrik.de/), verifies them, and cuts the published areas into small JSON bundles.
+`manifest.json` lists the regions (`regions`) and every bundle.
 
 ## Using the data
 

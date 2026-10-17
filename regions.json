@@ -1,0 +1,7 @@
+{
+  "_comment": "Regions published as static tiles. extract = Geofabrik path of the source extract (its .poly marks where data is complete); publish = which area to publish: a Geofabrik .poly path or a circle.",
+  "regions": [
+    {"id": "thueringen", "name": "Thuringia", "extract": "europe/germany", "publish": {"poly": "europe/germany/thueringen"}},
+    {"id": "odesa", "name": "Odesa", "extract": "europe/ukraine", "publish": {"circle": {"lat": 46.4825, "lon": 30.7233, "radiusKm": 20}}}
+  ]
+}

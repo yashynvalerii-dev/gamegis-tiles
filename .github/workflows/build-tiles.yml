@@ -18,16 +18,16 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 150
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
-      - name: Download extract (MD5 verified) and region boundary
-        run: npm run download-extract
-      - name: Export tile bundles
-        run: npm run export-tiles -- --out site
+      - name: Download extracts (MD5 verified) and region boundaries
+        run: npm run download-extract -- --config regions.json
+      - name: Export tile bundles for all regions
+        run: npm run export-tiles -- --config regions.json --out site
       - name: Add landing page and summary
         run: |
           cp -r site-template/. site/
@@ -35,12 +35,10 @@ jobs:
           node -e "
             const r=require('./site/export-report.json');
             const mb=b=>(b/1048576).toFixed(1)+' MB';
-            const lines=['## Tile build','',
-              '| | |','|---|---|',
-              '| Bundles | '+r.bundles+' |','| Size | '+mb(r.bytes)+' raw / '+mb(r.gzipBytes)+' gzip |',
-              '| Tiles READY | '+r.tiles.READY+' |','| Tiles INCOMPLETE | '+r.tiles.INCOMPLETE+' |',
-              '| Time | '+r.totalSeconds.toFixed(0)+' s |','| Peak memory | '+r.maxRssMB+' MB |'];
-            require('fs').appendFileSync(process.env.GITHUB_STEP_SUMMARY, lines.join('\n')+'\n');"
+            const lines=['## Tile build','','| Region | Bundles | Stored | READY | INCOMPLETE | Time |','|---|---|---|---|---|---|'];
+            for (const g of r.regions) lines.push('| '+g.id+' | '+g.bundles+' | '+mb(g.storedBytes||0)+' | '+g.tiles.READY+' | '+g.tiles.INCOMPLETE+' | '+g.seconds.toFixed(0)+' s |');
+            lines.push('','Total: '+r.bundles+' bundles, '+mb(r.storedBytes)+', '+r.totalSeconds.toFixed(0)+' s, peak '+r.maxRssMB+' MB');
+            require('fs').appendFileSync(process.env.GITHUB_STEP_SUMMARY, lines.join('\\n')+'\\n');"
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site
