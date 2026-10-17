@@ -27,16 +27,33 @@ async function md5Of(path) {
   return h.digest('hex');
 }
 
-/** Downloads <region>-latest.osm.pbf, verifying the published MD5. */
+/** YYMMDD for a date (Geofabrik dated snapshot names). */
+export const yymmdd = d => d.toISOString().slice(2, 10).replaceAll('-', '');
+
+/**
+ * Picks the file to download: "<name>-latest.osm.pbf" when its .md5 is published, otherwise the newest dated
+ * snapshot "<name>-YYMMDD.osm.pbf" of the last 10 days (large extracts such as Germany publish MD5 only for
+ * dated snapshots). Returns {url, expected} or throws.
+ */
+export async function pickSource(region, {fetchImpl = fetch, now = new Date()} = {}) {
+  const candidates = [`${BASE}${region}-latest.osm.pbf`];
+  for (let back = 0; back < 10; back++) candidates.push(`${BASE}${region}-${yymmdd(new Date(now - back * 86400000))}.osm.pbf`);
+  for (const url of candidates) {
+    const res = await fetchImpl(url + '.md5', {headers: UA});
+    if (!res.ok) continue;
+    const expected = (await res.text()).trim().split(/\s+/)[0].toLowerCase();
+    if (!/^[0-9a-f]{32}$/.test(expected)) throw new Error(`Unexpected MD5 file format at ${url}.md5`);
+    return {url, expected};
+  }
+  throw new Error(`No MD5-verified file found for ${region} (latest or last 10 days)`);
+}
+
+/** Downloads the extract (saved as <name>-latest.osm.pbf), verifying the published MD5. */
 async function downloadExtract(region) {
   const name = lastPart(region);
-  const url = `${BASE}${region}-latest.osm.pbf`;
   const target = join(dir, `${name}-latest.osm.pbf`), part = target + '.part';
+  const {url, expected} = await pickSource(region);
   console.log(`Downloading ${url}`);
-  const md5Res = await fetch(url + '.md5', {headers: UA});
-  if (!md5Res.ok) throw new Error(`MD5 file not available: HTTP ${md5Res.status}`);
-  const expected = (await md5Res.text()).trim().split(/\s+/)[0].toLowerCase();
-  if (!/^[0-9a-f]{32}$/.test(expected)) throw new Error('Unexpected MD5 file format');
   const res = await fetch(url, {headers: UA});
   if (!res.ok || !res.body) throw new Error(`Download failed: HTTP ${res.status}`);
   const total = Number(res.headers.get('content-length')) || 0;
