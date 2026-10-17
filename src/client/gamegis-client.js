@@ -12,7 +12,7 @@
  * Requirements: fetch, crypto.subtle, DecompressionStream (all modern browsers, Node >= 18).
  *
  *   import {createTileClient} from './gamegis-client.js';
- *   const tiles = createTileClient({mirrors: ['https://yashynvalerii-dev.github.io/gamegis-tiles/']});
+ *   const tiles = createTileClient({mirrors: ['https://<owner>.github.io/gamegis-tiles/']});
  *   const area = await tiles.getArea({lat: 51.0102, lon: 11.0036, radiusM: 500});
  *   if (area.status === 'READY') use(area.data.walkableWays, area.data.buildings, ...);
  *
