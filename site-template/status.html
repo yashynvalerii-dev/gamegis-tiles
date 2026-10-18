@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GameGIS — состояние</title>
+<meta name="description" content="Состояние сайта тайлов GameGIS: регионы, готовность, проверка сборки, зеркала.">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+<style>
+  :root { --bg:#fbfbf9; --fg:#1d1d1b; --muted:#66655f; --line:#e3e2dc; --card:#ffffff;
+          --ok:#2f8f4e; --warn:#c98a12; --bad:#c2412d; --info:#2f6fb5; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#151514; --fg:#ecebe6; --muted:#a3a29b; --line:#33322f; --card:#1d1d1b;
+          --ok:#4fb26e; --warn:#e0a83a; --bad:#e2664f; --info:#5d9be0; } }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.5 system-ui, sans-serif; }
+  main { max-width:980px; margin:0 auto; padding:24px 16px 48px; }
+  h1 { font-size:1.4rem; margin:0 0 4px; }
+  h2 { font-size:1.05rem; margin:28px 0 10px; }
+  .muted { color:var(--muted); }
+  .cards { display:grid; grid-template-columns:repeat(auto-fit, minmax(150px, 1fr)); gap:10px; margin-top:16px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:12px; }
+  .card b { display:block; font-size:1.35rem; }
+  .pill { display:inline-block; padding:1px 8px; border-radius:999px; font-size:.85em; font-weight:600; color:#fff; }
+  .OK { background:var(--ok); } .WARN { background:var(--warn); } .BLOCK, .DOWN { background:var(--bad); } .INFO { background:var(--info); }
+  #map { height:440px; border:1px solid var(--line); border-radius:10px; margin-top:8px; }
+  .scroll { overflow-x:auto; }
+  table { border-collapse:collapse; width:100%; font-size:.93em; }
+  th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); white-space:nowrap; }
+  th { color:var(--muted); font-weight:600; }
+  ul { padding-left:18px; } li { margin:2px 0; }
+  .legend span { display:inline-block; width:12px; height:12px; border-radius:2px; margin:0 4px 0 12px; vertical-align:-1px; }
+  a { color:var(--info); }
+</style>
+</head>
+<body>
+<main>
+  <h1>GameGIS — состояние сайта тайлов</h1>
+  <div class="muted" id="when">Загрузка…</div>
+  <div class="cards" id="cards"></div>
+
+  <h2>Карта готовности</h2>
+  <div class="muted legend">Квадрат = пачка (16 тайлов).
+    <span style="background:var(--ok)"></span>все READY
+    <span style="background:var(--warn)"></span>часть
+    <span style="background:var(--bad)"></span>нет READY
+    <span style="border:2px solid var(--info)"></span>точный слой</div>
+  <div id="map"></div>
+
+  <h2>Регионы</h2>
+  <div class="scroll"><table id="regions"></table></div>
+
+  <h2>Проверка последней сборки</h2>
+  <div id="check" class="muted">—</div>
+
+  <h2>Зеркала</h2>
+  <div class="scroll"><table id="mirrors"></table></div>
+
+  <p class="muted" style="margin-top:32px">Данные карты © <a href="https://www.openstreetmap.org/copyright">участники OpenStreetMap</a>, ODbL.
+    <a href="./">О сайте</a> · <a href="manifest.json">manifest.json</a> · <a href="build-check.json">build-check.json</a></p>
+</main>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const mb = b => (b / 1048576).toFixed(1) + ' МБ';
+const fmt = t => t ? t.slice(0, 16).replace('T', ' ') + ' UTC' : '—';
+const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const get = (u, as = 'json') => fetch(u + (u.includes('?') ? '&' : '?') + 'v=' + Date.now(), {cache: 'no-store'})
+  .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r[as](); });
+
+function bundleBounds(key) {
+  const [z, x, y] = key.split('/').map(Number), n = 2 ** z;
+  const lon = v => v / n * 360 - 180;
+  const lat = v => 180 / Math.PI * Math.atan(Math.sinh(Math.PI - 2 * Math.PI * v / n));
+  return [[lat(y + 1), lon(x)], [lat(y), lon(x + 1)]];
+}
+
+(async () => {
+  const [m, report, check] = await Promise.all([get('manifest.json'), get('export-report.json').catch(() => null), get('build-check.json').catch(() => null)]);
+  $('when').textContent = `Данные OSM на ${fmt(m.dataTimestamp)} · сборка ${fmt(m.generatedAt)}`;
+
+  const bundles = Object.values(m.bundles);
+  const ready = bundles.reduce((a, b) => a + b.readyTiles, 0), total = bundles.reduce((a, b) => a + b.totalTiles, 0);
+  const preciseCount = Object.values(m.precise ?? {}).reduce((a, L) => a + Object.keys(L.bundles).length, 0);
+  const cards = [
+    ['Проверка', check ? `<span class="pill ${esc(check.status)}">${esc(check.status)}</span>` : '—'],
+    ['Тайлов READY', `${ready.toLocaleString('ru')} <small class="muted">из ${total.toLocaleString('ru')}</small>`],
+    ['Готовность', total ? (ready / total * 100).toFixed(1) + ' %' : '—'],
+    ['Объём', report ? mb(report.storedBytes) : '—'],
+    ['Регионов', (m.regions ?? []).length],
+    ['Точных пачек', preciseCount],
+    ['Заявки', m.regionRequests ? '<span class="pill OK">приём включён</span>' : '<span class="pill WARN">выключен</span>'],
+  ];
+  $('cards').innerHTML = cards.map(([k, v]) => `<div class="card"><span class="muted">${k}</span><b>${v}</b></div>`).join('');
+
+  // Regions table (manifest + build report)
+  const stats = new Map((report?.regions ?? []).map(r => [r.id, r]));
+  const kindName = {pinned: 'постоянный', requested: 'по заявке', precise: 'точный слой'};
+  const rows = [...(m.regions ?? []).map(r => ({...r, s: stats.get(r.id)})),
+    ...Object.entries(m.precise ?? {}).flatMap(([p, L]) => L.regions.map(r => ({id: r.id, kind: 'precise', circle: r.circle, precision: p, s: stats.get(r.id)})))];
+  $('regions').innerHTML = '<tr><th>Регион</th><th>Тип</th><th>Область</th><th>READY</th><th>Неполных</th><th>Объём</th><th>Причины неполноты</th></tr>' +
+    rows.map(r => `<tr><td>${esc(r.name ?? r.id)}</td><td>${kindName[r.kind] ?? esc(r.kind)}${r.precision ? ' ' + esc(r.precision) + ' зн.' : ''}</td>
+      <td>${r.circle ? `круг ${esc(r.circle.radiusKm)} км` : 'граница области'}</td>
+      <td>${r.s?.tiles?.READY ?? r.readyTiles ?? '—'}</td><td>${r.s?.tiles?.INCOMPLETE ?? '—'}</td>
+      <td>${r.s?.storedBytes ? mb(r.s.storedBytes) : '—'}</td>
+      <td class="muted">${esc(Object.entries(r.s?.incompleteReasons ?? {}).map(([k, v]) => `${k} ${v}`).join(', '))}</td></tr>`).join('');
+
+  // Build check
+  if (check) {
+    const f = check.findings ?? [];
+    $('check').innerHTML = `<p><span class="pill ${esc(check.status)}">${esc(check.status)}</span> ${fmt(check.checkedAt)}
+      ${check.previous ? ` · было ${check.previous.storedMB} МБ, стало ${check.current.storedMB} МБ` : ''}</p>` +
+      (f.length ? '<ul>' + f.map(x => `<li><span class="pill ${esc(x.level)}">${esc(x.level)}</span> ${esc(x.code)}${x.region ? ' (' + esc(x.region) + ')' : ''}: ${esc(x.message)}</li>`).join('') + '</ul>'
+                : '<p>Замечаний нет.</p>');
+  }
+
+  // Mirrors: same build everywhere?
+  const mirrors = m.mirrors?.length ? m.mirrors : [location.href.replace(/[^/]*$/, '')];
+  $('mirrors').innerHTML = '<tr><th>Адрес</th><th>Состояние</th><th>Сборка</th></tr>' + mirrors.map((u, i) => `<tr id="mir${i}"><td>${esc(u)}</td><td>проверка…</td><td></td></tr>`).join('');
+  mirrors.forEach((u, i) => get(u + 'manifest.json').then(x => {
+    const same = x.generatedAt === m.generatedAt;
+    $('mir' + i).innerHTML = `<td><a href="${esc(u)}status.html">${esc(u)}</a></td><td><span class="pill ${same ? 'OK' : 'WARN'}">${same ? 'совпадает' : 'другая сборка'}</span></td><td>${fmt(x.generatedAt)}</td>`;
+  }).catch(e => { $('mir' + i).innerHTML = `<td>${esc(u)}</td><td><span class="pill DOWN">недоступно</span></td><td class="muted">${esc(e.message)}</td>`; }));
+
+  // Map
+  if (!window.L) { $('map').textContent = 'Карта не загрузилась (нет доступа к unpkg.com).'; return; }
+  const map = L.map('map', {preferCanvas: true});
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom: 18,
+    attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'}).addTo(map);
+  const all = [];
+  for (const [key, b] of Object.entries(m.bundles)) {
+    const share = b.totalTiles ? b.readyTiles / b.totalTiles : 0;
+    const color = share === 1 ? css('--ok') : share > 0 ? css('--warn') : css('--bad');
+    const bounds = bundleBounds(key); all.push(...bounds);
+    L.rectangle(bounds, {color, weight: 0.5, fillOpacity: share === 1 ? 0.25 : 0.55})
+      .bindPopup(`Пачка ${esc(key)}<br>READY ${b.readyTiles} из ${b.totalTiles}<br>${(b.bytes / 1024).toFixed(0)} КБ`).addTo(map);
+  }
+  for (const [p, Lr] of Object.entries(m.precise ?? {})) for (const key of Object.keys(Lr.bundles))
+    L.rectangle(bundleBounds(key), {color: css('--info'), weight: 2, fill: false}).bindPopup(`Точный слой ${esc(p)} зн.: ${esc(key)}`).addTo(map);
+  for (const r of m.regions ?? []) if (r.kind === 'requested' && r.circle)
+    L.circle([r.circle.lat, r.circle.lon], {radius: r.circle.radiusKm * 1000, color: css('--info'), weight: 1.5, dashArray: '6 4', fill: false})
+      .bindPopup(`Область по заявке ${esc(r.id)}<br>${esc(r.circle.radiusKm)} км`).addTo(map);
+  if (all.length) map.fitBounds(all); else map.setView([50, 20], 4);
+})().catch(e => { $('when').textContent = 'Не удалось загрузить данные: ' + e.message; });
+</script>
+</body>
+</html>
