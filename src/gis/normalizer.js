@@ -11,7 +11,7 @@ import { assertPosition, pointInPolygon } from './geometry.js';
 import { classifyWayTags, isEntranceTags, isPowerPointTags, requiresRelationSupport } from './classifier.js';
 
 export const DATASET_ID = 'OSM_MVP_BASE_V1'; // layer set is identified by NORMALIZATION_VERSION (V3 adds POWER)
-export const NORMALIZATION_VERSION = 'OSM_NORMALIZER_V4'; // V2: multipolygons; V3: power + tag allowlist; V4: site perimeters, linear military, building-on-road fix
+export const NORMALIZATION_VERSION = 'OSM_NORMALIZER_V5'; // V2: multipolygons; V3: power + tag allowlist; V4: site perimeters, linear military, building-on-road fix; V5: relation members of multipolygons skipped
 export const PROCESSED_LAYERS = Object.freeze([
   'WALKABLE', 'BUILDINGS', 'ENTRANCES', 'WATER', 'RAILWAYS', 'POWER',
 ]);
@@ -180,13 +180,16 @@ function memberCoordinates(member, wayById, nodes) {
 
 /**
  * Builds Polygon/MultiPolygon coordinates from an OSM multipolygon relation.
- * Fails closed on missing members, open rings, nested relations or orphan inner rings.
+ * Fails closed on missing members, open rings or orphan inner rings. Relation members are not valid in an OSM
+ * multipolygon; like common renderers we skip them (result.skippedRelationMembers) and build the area from its
+ * ways only — if those ways do not form closed rings on their own, the area still fails closed.
  */
 export function assembleMultipolygon(relation, wayById, nodes, { outerRoles = ['outer', ''] } = {}) {
   const members = Array.isArray(relation.members) ? relation.members : [];
   const outerPieces = [], innerPieces = [];
+  let skippedRelationMembers = 0;
   for (const m of members) {
-    if (m?.type === 'relation') return { error: 'MULTIPOLYGON_NESTED_RELATION_NOT_SUPPORTED' };
+    if (m?.type === 'relation') { skippedRelationMembers++; continue; }
     if (m?.type !== 'way') continue;
     const role = typeof m.role === 'string' ? m.role : '';
     const isOuter = outerRoles.includes(role);
@@ -208,7 +211,7 @@ export function assembleMultipolygon(relation, wayById, nodes, { outerRoles = ['
     owners.sort((a, b) => a.area - b.area)[0].holes.push(hole);
   }
   const parts = polygons.map((pg) => [pg.ring, ...pg.holes]);
-  return { polygons: parts };
+  return { polygons: parts, skippedRelationMembers };
 }
 
 /**
@@ -341,6 +344,8 @@ export function normalizeOsmMvpBase(payload, { provider } = {}) {
         continue;
       }
       assembledMultipolygonCount++;
+      if (mp.skippedRelationMembers) warnings.push({ code: 'MULTIPOLYGON_RELATION_MEMBER_IGNORED', sourceType: 'relation',
+        sourceId: relation.id, count: mp.skippedRelationMembers });
       for (const featureClass of classes) {
         const geometry = POLYGON_CLASSES.has(featureClass)
           ? (mp.polygons.length === 1
@@ -378,7 +383,7 @@ export function normalizeOsmMvpBase(payload, { provider } = {}) {
       processedLayers: [...PROCESSED_LAYERS],
       errors,
       warnings,
-      limitations: ['OSM_NESTED_RELATIONS_NOT_SUPPORTED'],
+      limitations: ['OSM_RELATION_MEMBERS_OF_MULTIPOLYGONS_IGNORED'],
     },
   };
 }
