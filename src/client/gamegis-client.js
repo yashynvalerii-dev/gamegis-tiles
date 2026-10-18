@@ -18,7 +18,7 @@
  *
  * Map data © OpenStreetMap contributors (ODbL). Applications must show this attribution.
  */
-export const CLIENT_VERSION = '1.0.0';
+export const CLIENT_VERSION = '1.1.0'; // 1.1: request endpoint v1, precise layers, manifest mirrors
 export const SUPPORTED_MANIFESTS = ['GAMEGIS_TILE_MANIFEST_V2'];
 export const ATTRIBUTION = '© OpenStreetMap contributors (ODbL)';
 /** Activity reports are accepted this far outside a requested area so the area can follow the players. */
