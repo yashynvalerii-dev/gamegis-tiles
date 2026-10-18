@@ -53,7 +53,7 @@ jobs:
         if: failure()
         run: |
           cp -r diag /tmp/diag; df -h > /tmp/diag/disk.txt; free -m > /tmp/diag/memory.txt
-          echo "run ${{ github.run_id }} commit ${{ github.sha }}" > /tmp/diag/RUN.txt
+          echo "run ${{ github.run_id }} commit ${{ github.sha }} failedAt $(date -u +%Y-%m-%dT%H:%M:%SZ)" > /tmp/diag/RUN.txt
           git config user.name "github-actions[bot]"; git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git switch -f --orphan ci-diagnostics; git rm -rqf --cached . >/dev/null 2>&1 || true
           find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +

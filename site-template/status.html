@@ -51,6 +51,7 @@
   <div class="scroll"><table id="regions"></table></div>
 
   <h2>Проверка последней сборки</h2>
+  <div id="attempt"></div>
   <div id="check" class="muted">—</div>
 
   <h2>Зеркала</h2>
@@ -115,6 +116,17 @@ function bundleBounds(key) {
       (f.length ? '<ul>' + f.map(x => `<li><span class="pill ${esc(x.level)}">${esc(x.level)}</span> ${esc(x.code)}${x.region ? ' (' + esc(x.region) + ')' : ''}: ${esc(x.message)}</li>`).join('') + '</ul>'
                 : '<p>Замечаний нет.</p>');
   }
+
+  // Last failed attempt (diagnostics branch of the public repository): newer than the published build?
+  const gh = (m.mirrors ?? []).map(u => /^https:\/\/([^.]+)\.github\.io\/([^/]+)\//.exec(u)).find(Boolean);
+  if (gh) get(`https://raw.githubusercontent.com/${gh[1]}/${gh[2]}/ci-diagnostics/RUN.txt`, 'text').then(t => {
+    const at = /failedAt (\S+)/.exec(t)?.[1], run = /run (\d+)/.exec(t)?.[1];
+    $('attempt').innerHTML = at && at > m.generatedAt
+      ? `<p><span class="pill WARN">последняя попытка обновления не удалась</span> ${fmt(at)} —
+         <a href="https://github.com/${esc(gh[1])}/${esc(gh[2])}/actions/runs/${esc(run)}">подробности</a>.
+         Опубликована и доступна предыдущая успешная сборка от ${fmt(m.generatedAt)}.</p>`
+      : `<p><span class="pill OK">опубликована последняя успешная сборка</span> ${fmt(m.generatedAt)}${at ? ` · последний сбой ${fmt(at)} (раньше, уже исправлен)` : ''}</p>`;
+  }).catch(() => {});
 
   // Mirrors: same build everywhere?
   const mirrors = m.mirrors?.length ? m.mirrors : [location.href.replace(/[^/]*$/, '')];
