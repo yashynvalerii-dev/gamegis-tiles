@@ -25,7 +25,7 @@ concurrency:
 jobs:
   build:
     env:
-      HAS_CLOUDFLARE: ${{ secrets.CLOUDFLARE_API_TOKEN != '' && secrets.CLOUDFLARE_ACCOUNT_ID != '' }}
+      HAS_CLOUDFLARE: ${{ secrets.CLOUDFLARE_API_TOKEN != '' }}
       TILES_SITE_URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/
     runs-on: ubuntu-24.04   # pinned: ubuntu-latest moves to 26.04 from 2026-10-19; upgrade after a test run
     timeout-minutes: 150
@@ -77,8 +77,10 @@ jobs:
         continue-on-error: true
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
+          # the account id is optional: with a single account wrangler finds it from the token
+          if [ -n "$ACCOUNT_ID" ]; then export CLOUDFLARE_ACCOUNT_ID="$ACCOUNT_ID"; fi
           npx --yes wrangler@4 pages project create gamegis-tiles --production-branch main >/dev/null 2>&1 || true
           npx --yes wrangler@4 pages deploy site --project-name gamegis-tiles --branch main --commit-dirty=true | tee /tmp/cf.log
           sleep 20
