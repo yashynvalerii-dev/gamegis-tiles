@@ -10,7 +10,7 @@
 import {readFileSync, writeFileSync, existsSync, appendFileSync} from 'node:fs';
 import {resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {readRequests, planDemand} from '../src/requests/regionRequests.js';
+import {readRequests, planDemand, planPrecise} from '../src/requests/regionRequests.js';
 import {tileFor} from '../src/client/gamegis-client.js';
 
 const pick = (o, keys) => Object.fromEntries(keys.filter(k => Number.isFinite(o[k])).map(k => [k, o[k]]));
@@ -27,6 +27,7 @@ export async function processRequests({configPath = 'regions.json', outPath = 'r
   const s = config.regionRequests ?? {};
   if (!csvUrl) return {configured: false, changed: false, note: 'REQUESTS_CSV_URL secret is not set'};
   const requested = existsSync(outPath) ? JSON.parse(readFileSync(outPath, 'utf8')) : {regions: []};
+  requested.precise ??= [];
 
   const get = async (url, kind) => {
     const res = await fetchImpl(url, {headers: UA, cache: 'no-store'});
@@ -50,10 +51,15 @@ export async function processRequests({configPath = 'regions.json', outPath = 'r
   const {regions, changes} = planDemand(requests, config.regions, requested.regions, index, {
     maxNewPerRun: s.maxNewPerRun ?? 2, maxTotalRegions: s.maxTotalRegions ?? 15, budgetMB: s.budgetMB ?? 700,
     sizesMB, pinnedMB, isPublished, now, ...pick(s, ['windowDays', 'activityDays', 'minRadiusKm', 'maxRadiusKm', 'marginKm', 'reachKm'])});
-  const changed = JSON.stringify(regions) !== JSON.stringify(requested.regions);
-  if (changed) writeFileSync(outPath, JSON.stringify({regions, updatedAt: now.toISOString()}, null, 2) + '\n');
+  // Base areas first; precise copies get only the space left (they are evicted first).
+  const est = r => sizesMB[r.id] ?? 0.02 * r.publish.circle.radiusKm ** 2;
+  const baseMB = pinnedMB + regions.reduce((a, r) => a + est(r), 0);
+  const {precise, changes: preciseChanges} = planPrecise(requests, requested.precise, index, {baseMB, budgetMB: s.budgetMB ?? 700, sizesMB, now});
+  const changed = JSON.stringify(regions) !== JSON.stringify(requested.regions) || JSON.stringify(precise) !== JSON.stringify(requested.precise);
+  if (changed) writeFileSync(outPath, JSON.stringify({regions, precise, updatedAt: now.toISOString()}, null, 2) + '\n');
   return {configured: true, changed, requests: requests.length, rejected, ...changes,
-    regions: regions.map(r => ({id: r.id, radiusKm: r.publish.circle.radiusKm, rating: r.rating, extract: r.extract}))};
+    regions: regions.map(r => ({id: r.id, radiusKm: r.publish.circle.radiusKm, rating: r.rating, extract: r.extract})),
+    precise: precise.map(r => ({id: r.id, radiusKm: r.publish.circle.radiusKm, precision: r.precision})), preciseChanges};
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

@@ -11,7 +11,7 @@ import {existsSync, rmSync, mkdirSync, writeFileSync, readFileSync} from 'node:f
 import {join, resolve, dirname, basename} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {gzipSync} from 'node:zlib';
-import {loadRegionModel, exportRegion, circleRegion, mergeManifests} from '../src/export/regionExporter.js';
+import {loadRegionModel, exportRegion, circleRegion, mergeManifests, bundleAlignedRegion, mergePreciseLayers} from '../src/export/regionExporter.js';
 import {readPoly} from '../src/providers/polyFile.js';
 
 const projectDir = resolve(fileURLToPath(new URL('..', import.meta.url)));
@@ -46,7 +46,7 @@ function grow(b, km) {
 export function runConfig(o, {log = console.log} = {}) {
   // Several configs (e.g. regions.json + requested-regions.json) are merged; settings come from the first.
   const configs = (o.configPaths ?? [o.configPath]).filter(p => existsSync(p)).map(p => JSON.parse(readFileSync(p, 'utf8')));
-  const config = {...configs[0], regions: configs.flatMap(c => c.regions ?? [])};
+  const config = {...configs[0], regions: configs.flatMap(c => c.regions ?? []), precise: configs.flatMap(c => c.precise ?? [])};
   rmSync(o.outDir, {recursive: true, force: true}); mkdirSync(o.outDir, {recursive: true});
   const t0 = Date.now(), parts = [], regionStats = [];
   for (const r of config.regions) {
@@ -70,7 +70,26 @@ export function runConfig(o, {log = console.log} = {}) {
     log(`  ${r.id}: bundles ${stats.bundles}, stored ${mb(stats.storedBytes ?? 0)}, READY ${stats.tiles.READY}, ` +
       `INCOMPLETE ${stats.tiles.INCOMPLETE} ${JSON.stringify(stats.incompleteReasons)} (${((Date.now() - t) / 1000).toFixed(0)} s)`);
   }
+  // Precise layers (6/7 decimals) only for sectors games asked for; whole bundles, separate paths.
+  const preciseParts = [];
+  for (const r of config.precise) {
+    const name = lastPart(r.extract);
+    const pbf = join(o.extractsDir, `${name}-latest.osm.pbf`);
+    if (!existsSync(pbf)) { log(`WARNING precise ${r.id}: extract ${name} missing, skipped`); continue; }
+    const extractPoly = join(o.extractsDir, `${name}.poly`);
+    const boundary = existsSync(extractPoly) ? readPoly(extractPoly) : null;
+    const publish = bundleAlignedRegion(r.publish.circle, o.bundleZoom);
+    const t = Date.now();
+    log(`== precise ${r.id} (${r.precision} decimals) from ${name}`);
+    const model = loadRegionModel(pbf, {aoi: grow(publish.bbox, 3), onProgress: m => log('  ' + m)});
+    const {manifest, stats} = exportRegion({model, outDir: o.outDir, boundary, publish, bundleZoom: o.bundleZoom,
+      writeManifest: false, coordDecimals: r.precision, bundlesDir: `bundles-p${r.precision}`, onProgress: m => log('  ' + m)});
+    preciseParts.push({id: r.id, precision: r.precision, manifest, circle: r.publish.circle});
+    regionStats.push({id: r.id, kind: 'precise', precision: r.precision, seconds: (Date.now() - t) / 1000, ...stats});
+    log(`  ${r.id}: bundles ${stats.bundles}, stored ${mb(stats.storedBytes ?? 0)} (${((Date.now() - t) / 1000).toFixed(0)} s)`);
+  }
   const manifest = mergeManifests(parts);
+  if (preciseParts.length) manifest.precise = mergePreciseLayers(preciseParts);
   if (config.regionRequests?.endpoint) {
     // public: where clients send region requests and activity (contract v1, see gamegis-client.js)
     manifest.regionRequests = {type: 'endpoint', version: 1, url: config.regionRequests.endpoint};

@@ -172,14 +172,20 @@ export function createTileClient({mirrors, fetchImpl = globalThis.fetch, timeout
     return manifestPromise;
   }
 
-  /** One bundle by key "z/x/y", or null when the area has not been prepared. */
-  async function getBundle(key) {
-    if (memory.has(key)) return memory.get(key);
+  /**
+   * One bundle by key "z/x/y", or null when the area has not been prepared. precision 6/7 uses the precise layer
+   * when that bundle exists there, otherwise the base layer (5 decimals); bundle.precision tells which one came.
+   */
+  async function getBundle(key, precision = 5) {
     const m = await getManifest();
-    const entry = m.bundles[key];
+    const layer = precision > 5 ? m.precise?.[precision] : null;
+    const usePrecise = Boolean(layer?.bundles?.[key]);
+    const memKey = usePrecise ? `p${precision}:${key}` : key;
+    if (memory.has(memKey)) return memory.get(memKey);
+    const entry = usePrecise ? layer.bundles[key] : m.bundles[key];
     if (!entry) return null;
     const [z, x, y] = key.split('/');
-    const path = m.bundlePath.replace('{z}', z).replace('{x}', x).replace('{y}', y);
+    const path = (usePrecise ? layer.bundlePath : m.bundlePath).replace('{z}', z).replace('{x}', x).replace('{y}', y);
     const cache = await openCache();
     const cacheKey = `https://gamegis.cache/${entry.sha256}`;
     let bytes = null;
@@ -202,7 +208,8 @@ export function createTileClient({mirrors, fetchImpl = globalThis.fetch, timeout
     }
     if (!bytes) throw new Error(`BUNDLE_UNAVAILABLE ${key}: ${errors.join('; ')}`);
     const bundle = JSON.parse(m.bundleEncoding === 'gzip' ? await gunzip(bytes) : new TextDecoder().decode(bytes));
-    memory.set(key, bundle);
+    bundle.precision = usePrecise ? precision : 5;
+    memory.set(memKey, bundle);
     return bundle;
   }
 
@@ -210,14 +217,16 @@ export function createTileClient({mirrors, fetchImpl = globalThis.fetch, timeout
    * Features for a circle ({lat, lon, radiusM}) or a box ({bbox: {south, west, north, east}}). status: READY (every z15 tile READY), PARTIAL (some READY) or UNAVAILABLE.
    * tiles: { "15/x/y": {status, reason?} } — MISSING means the area has not been prepared yet.
    * data: feature groups merged from READY tiles' bundles (features may extend beyond the circle).
+   * precision: 5 (default) | 6 | 7 decimal places wanted; the answer's `precision` is what was actually delivered
+   * (the lowest over the bundles used): a precise layer exists only where a game asked for it (requestRegion).
    */
-  async function getArea({lat, lon, radiusM, bbox} = {}) {
+  async function getArea({lat, lon, radiusM, bbox, precision = 5} = {}) {
     const m = await getManifest();
     const tz = m.tileZoom, bz = m.bundleZoom, shift = tz - bz;
     const tiles = bbox ? tilesForBbox(bbox, tz) : tilesForCircle({lat, lon, radiusM}, tz);
     const keys = [...new Set(tiles.map(t => `${bz}/${t.x >> shift}/${t.y >> shift}`))];
     const bundles = new Map();
-    for (const k of keys) bundles.set(k, await getBundle(k)); // sequential: gentle on free hosting
+    for (const k of keys) bundles.set(k, await getBundle(k, precision)); // sequential: gentle on free hosting
     const status = {};
     for (const t of tiles) {
       const id = `${tz}/${t.x}/${t.y}`;
@@ -235,8 +244,10 @@ export function createTileClient({mirrors, fetchImpl = globalThis.fetch, timeout
     }
     const values = Object.values(status);
     const ready = values.filter(s => s.status === 'READY').length;
+    const delivered = [...bundles.values()].filter(Boolean).map(b => b.precision ?? 5);
     return {status: ready === values.length ? 'READY' : ready ? 'PARTIAL' : 'UNAVAILABLE',
       readyTiles: ready, totalTiles: values.length, tiles: status, data,
+      precision: delivered.length ? Math.min(...delivered) : 5,
       dataTimestamp: m.dataTimestamp, attribution: ATTRIBUTION};
   }
 
@@ -269,9 +280,9 @@ export function createTileClient({mirrors, fetchImpl = globalThis.fetch, timeout
     checkApp(app);
     if (![5, 6, 7].includes(precision)) throw new TypeError('precision must be 5, 6 or 7 decimal places');
     const m = await getManifest();
-    const area = await getArea({lat, lon, radiusM});
-    // precise layers (6/7 decimals) are built only on request, so a READY base area does not answer them
-    if (precision === 5 && area.status === 'READY') return {sent: false, reason: 'ALREADY_AVAILABLE'};
+    const area = await getArea({lat, lon, radiusM, precision});
+    // precise layers (6/7 decimals) are built only on request: a READY base area answers only precision 5
+    if (area.status === 'READY' && area.precision >= precision) return {sent: false, reason: 'ALREADY_AVAILABLE'};
     if (!endpointReady(m)) return {sent: false, reason: 'REQUESTS_NOT_CONFIGURED'};
     const key = `${Math.round(lat * 20) / 20}/${Math.round(lon * 20) / 20}/${precision}`;
     if (requested.has(key)) return {sent: false, reason: 'ALREADY_REQUESTED'};

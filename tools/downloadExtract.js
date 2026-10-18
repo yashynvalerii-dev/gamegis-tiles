@@ -91,7 +91,7 @@ export function plan(args) {
       const path = resolve(args[++i]);
       if (!existsSync(path)) continue;   // optional configs (requested-regions.json) may not exist yet
       const config = JSON.parse(readFileSync(path, 'utf8'));
-      for (const r of config.regions) {
+      for (const r of [...(config.regions ?? []), ...(config.precise ?? [])]) {
         extracts.add(r.extract); polys.add(r.extract);
         if (r.publish?.poly) polys.add(r.publish.poly);
       }

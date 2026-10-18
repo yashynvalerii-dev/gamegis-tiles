@@ -289,7 +289,7 @@ export function roundGeometry(geometry, decimals = COORD_DECIMALS) {
 }
 
 export function exportRegion({model, outDir, boundary, publish = null, bundleZoom = 13, bufferM = 40, onProgress = () => {},
-  generatedAt = new Date().toISOString(), writeManifest = true, coordDecimals = COORD_DECIMALS}) {
+  generatedAt = new Date().toISOString(), writeManifest = true, coordDecimals = COORD_DECIMALS, bundlesDir = 'bundles'}) {
   if (bundleZoom > TILE_ZOOM || bundleZoom < 10) throw new RangeError('bundleZoom must be 10..15');
   const started = Date.now();
   const header = model.header;
@@ -308,7 +308,7 @@ export function exportRegion({model, outDir, boundary, publish = null, bundleZoo
   const empty = {ways: [], relations: [], entrances: []};
   const manifest = {format: MANIFEST_FORMAT, datasetId: DATASET_ID, normalizationVersion: NORMALIZATION_VERSION,
     provider: 'GEOFABRIK_EXTRACT', dataTimestamp, generatedAt, tileZoom: TILE_ZOOM, bundleZoom, bufferM,
-    bundlePath: BUNDLE_PATH_TEMPLATE, bundleEncoding: 'gzip',
+    bundlePath: `${bundlesDir}/{z}/{x}/{y}.json.gz`, bundleEncoding: 'gzip',
     license: 'ODbL 1.0 — © OpenStreetMap contributors', bundles: {}};
   const stats = {bundles: 0, files: 0, bytes: 0, gzipBytes: 0, maxBundleBytes: 0, maxBundleGzipBytes: 0,
     tiles: {READY: 0, INCOMPLETE: 0}, incompleteReasons: {}, features: 0};
@@ -358,7 +358,7 @@ export function exportRegion({model, outDir, boundary, publish = null, bundleZoo
       const bytes = Buffer.from(body, 'utf8');
       const stored = gzipSync(bytes, {level: 9});
       const gz = stored.length;
-      const dir = join(outDir, 'bundles', String(bundleZoom), String(bx));
+      const dir = join(outDir, bundlesDir, String(bundleZoom), String(bx));
       mkdirSync(dir, {recursive: true});
       writeFileSync(join(dir, `${by}.json.gz`), stored);
       const ready = Object.values(tilesOut).filter(t => t.status === 'READY').length;
@@ -395,6 +395,34 @@ export function circleRegion({lat, lon, radiusKm}, vertices = 72) {
     pts.push([lon + dLon, lat + dLat]);
   }
   return makeRegion([{hole: false, points: pts}]);
+}
+
+/**
+ * Rectangle region covering the circle, snapped outward to whole bundles (z = bundleZoom). Precise layers use it
+ * so overlapping sectors share identical whole bundles instead of half-filled ones.
+ */
+export function bundleAlignedRegion({lat, lon, radiusKm}, bundleZoom = 13) {
+  const dLat = radiusKm / 111.32, dLon = radiusKm / (111.32 * Math.cos(lat * Math.PI / 180));
+  const n = 2 ** bundleZoom;
+  const tx = l => Math.floor((l + 180) / 360 * n);
+  const ty = la => { const r = la * Math.PI / 180; return Math.floor((1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2 * n); };
+  const lonOf = x => x / n * 360 - 180;
+  const latOf = y => { const k = Math.PI - 2 * Math.PI * y / n; return 180 / Math.PI * Math.atan(Math.sinh(k)); };
+  const x0 = tx(lon - dLon), x1 = tx(lon + dLon), y0 = ty(lat + dLat), y1 = ty(lat - dLat);
+  const w = lonOf(x0), e = lonOf(x1 + 1), no = latOf(y0), s = latOf(y1 + 1);
+  return makeRegion([{hole: false, points: [[w, s], [e, s], [e, no], [w, no], [w, s]]}]);
+}
+
+/** Precise layers: {precision: {bundlePath, bundles, regions}}; a bundle shared by two sectors is kept once. */
+export function mergePreciseLayers(parts) {
+  const layers = {};
+  for (const {id, precision, manifest, circle} of parts) {
+    const L = (layers[precision] ??= {bundlePath: manifest.bundlePath, bundles: {}, regions: []});
+    let added = 0;
+    for (const [k, v] of Object.entries(manifest.bundles)) if (!L.bundles[k]) { L.bundles[k] = v; added++; }
+    L.regions.push({id, circle, bundles: added});
+  }
+  return layers;
 }
 
 /** Merges per-region manifests into one site manifest. Bundle keys must not collide. */

@@ -351,3 +351,29 @@ export function planDemand(requests, pinned, requested, index, {maxNewPerRun = 2
   });
   return {regions: out, changes};
 }
+
+// ---------------------------------------------------------------------------------------------
+// Precise layers (provisional owner rule, 2026-10-17): the base layer has 5 decimals; games may ask for
+// 6 or 7 in a sector. Each precision level is planned like requested areas (it follows play, adapts to
+// activity), but it is planned AFTER the base areas and gets only the space they leave: when storage runs
+// out, precise copies are evicted first and games fall back to the base layer.
+export const PRECISE_LEVELS = Object.freeze([6, 7]);
+export const PRECISE_DEFAULTS = Object.freeze({maxRadiusKm: 10, maxNewPerRun: 2, maxTotal: 10});
+
+/** Plans precise sectors. baseMB = pinned + requested base areas (they always win). Returns {precise, changes}. */
+export function planPrecise(requests, previous, index, {baseMB = 0, budgetMB = 700, sizesMB = {}, now = new Date(),
+  maxRadiusKm = PRECISE_DEFAULTS.maxRadiusKm, maxNewPerRun = PRECISE_DEFAULTS.maxNewPerRun, maxTotal = PRECISE_DEFAULTS.maxTotal,
+  ...tuning} = {}) {
+  const precise = [], changes = {};
+  for (const p of PRECISE_LEVELS) {
+    const prev = previous.filter(r => r.precision === p).map(({precision, ...r}) => ({...r, id: r.id.replace(/^p\d-/, '')}));
+    const reqs = requests.filter(r => r.precision === p);
+    const usedByOthers = baseMB + precise.reduce((a, r) => a + (sizesMB[r.id] ?? 0.03 * r.publish.circle.radiusKm ** 2), 0);
+    const plan = planDemand(reqs, [], prev, index, {...tuning, maxRadiusKm, maxNewPerRun, maxTotalRegions: maxTotal,
+      budgetMB, pinnedMB: usedByOthers, now,
+      sizesMB: Object.fromEntries(Object.entries(sizesMB).filter(([k]) => k.startsWith(`p${p}-`)).map(([k, v]) => [k.slice(3), v]))});
+    for (const r of plan.regions) precise.push({...r, id: `p${p}-${r.id}`, precision: p});
+    changes[p] = plan.changes;
+  }
+  return {precise, changes};
+}
