@@ -1,0 +1,53 @@
+
+> gamegis-tiles@1.0.0 download-extract
+> node tools/downloadExtract.js --config regions.json --config requested-regions.json
+
+Downloading https://download.geofabrik.de/europe/germany-261017.osm.pbf
+  100 MB / 4638 MB
+  200 MB / 4638 MB
+  300 MB / 4638 MB
+  400 MB / 4638 MB
+  500 MB / 4638 MB
+  600 MB / 4638 MB
+  700 MB / 4638 MB
+  800 MB / 4638 MB
+  900 MB / 4638 MB
+  1000 MB / 4638 MB
+  1100 MB / 4638 MB
+  1200 MB / 4638 MB
+  1300 MB / 4638 MB
+  1400 MB / 4638 MB
+  1500 MB / 4638 MB
+  1600 MB / 4638 MB
+  1700 MB / 4638 MB
+  1800 MB / 4638 MB
+  1900 MB / 4638 MB
+  2000 MB / 4638 MB
+  2100 MB / 4638 MB
+  2200 MB / 4638 MB
+  2300 MB / 4638 MB
+  2400 MB / 4638 MB
+  2500 MB / 4638 MB
+  2600 MB / 4638 MB
+  2700 MB / 4638 MB
+  2800 MB / 4638 MB
+  2900 MB / 4638 MB
+  3000 MB / 4638 MB
+  3100 MB / 4638 MB
+  3200 MB / 4638 MB
+  3300 MB / 4638 MB
+  3400 MB / 4638 MB
+  3500 MB / 4638 MB
+  3600 MB / 4638 MB
+  3700 MB / 4638 MB
+  3800 MB / 4638 MB
+  3900 MB / 4638 MB
+  4000 MB / 4638 MB
+  4100 MB / 4638 MB
+  4200 MB / 4638 MB
+  4300 MB / 4638 MB
+  4400 MB / 4638 MB
+  4500 MB / 4638 MB
+  4600 MB / 4638 MB
+OK: /home/runner/work/gamegis-tiles/gamegis-tiles/data/extracts/germany-latest.osm.pbf (4638.1 MB, MD5 verified)
+FAILED: fetch failed
