@@ -27,6 +27,23 @@ async function md5Of(path) {
   return h.digest('hex');
 }
 
+/**
+ * Runs fn() again after a pause when it fails for a transient reason (network error, HTTP 429/5xx, an incomplete
+ * or corrupted download). Every successful attempt is still verified by its MD5; after the last attempt it fails
+ * closed (the site is not rebuilt, the published one stays).
+ */
+export async function withRetry(fn, {label = 'download', delaysS = [15, 60, 180], sleep = s => new Promise(r => setTimeout(r, s * 1000)), log = console.log} = {}) {
+  for (let attempt = 0; ; attempt++) {
+    try { return await fn(); } catch (e) {
+      const why = e?.cause?.message ? `${e.message} (${e.cause.message})` : String(e?.message ?? e);
+      if (e?.permanent || attempt >= delaysS.length) throw new Error(`${label}: ${why}`);
+      log(`  ${label}: ${why} — retry ${attempt + 1}/${delaysS.length} in ${delaysS[attempt]} s`);
+      await sleep(delaysS[attempt]);
+    }
+  }
+}
+const httpError = (what, status) => Object.assign(new Error(`${what}: HTTP ${status}`), {permanent: status === 404 || status === 403 || status === 410});
+
 /** YYMMDD for a date (Geofabrik dated snapshot names). */
 export const yymmdd = d => d.toISOString().slice(2, 10).replaceAll('-', '');
 
@@ -55,7 +72,7 @@ async function downloadExtract(region) {
   const {url, expected} = await pickSource(region);
   console.log(`Downloading ${url}`);
   const res = await fetch(url, {headers: UA});
-  if (!res.ok || !res.body) throw new Error(`Download failed: HTTP ${res.status}`);
+  if (!res.ok || !res.body) throw httpError('Download failed', res.status);
   const total = Number(res.headers.get('content-length')) || 0;
   let got = 0, shown = 0;
   const counter = new TransformStream({transform(chunk, ctl) {
@@ -76,7 +93,8 @@ async function downloadExtract(region) {
 /** Downloads <region>.poly (the boundary of the area Geofabrik cut). */
 async function downloadPoly(region) {
   const res = await fetch(`${BASE}${region}.poly`, {headers: UA});
-  if (!res.ok) { console.warn(`WARNING: ${region}.poly not available (HTTP ${res.status})`); return false; }
+  if (res.status === 404) { console.warn(`WARNING: ${region}.poly not available (HTTP 404)`); return false; }
+  if (!res.ok) throw httpError(`${region}.poly`, res.status);
   const path = join(dir, `${lastPart(region)}.poly`);
   writeFileSync(path, await res.text());
   console.log(`OK: ${path} (boundary)`);
@@ -106,7 +124,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   try {
     const {extracts, polys} = plan(process.argv.slice(2));
     mkdirSync(dir, {recursive: true});
-    for (const r of extracts) await downloadExtract(r);
-    for (const p of polys) await downloadPoly(p);
+    for (const r of extracts) await withRetry(() => downloadExtract(r), {label: r});
+    for (const p of polys) await withRetry(() => downloadPoly(p), {label: `${p}.poly`});
   } catch (e) { console.error('FAILED:', e.message); process.exitCode = 1; }
 }

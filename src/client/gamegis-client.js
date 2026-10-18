@@ -18,7 +18,7 @@
  *
  * Map data © OpenStreetMap contributors (ODbL). Applications must show this attribution.
  */
-export const CLIENT_VERSION = '1.1.0'; // 1.1: request endpoint v1, precise layers, manifest mirrors
+export const CLIENT_VERSION = '1.2.0'; // 1.1: request endpoint v1, precise layers, manifest mirrors; 1.2: shared nodes, groups, tileStatusAt, splitBbox
 export const SUPPORTED_MANIFESTS = ['GAMEGIS_TILE_MANIFEST_V2'];
 export const ATTRIBUTION = '© OpenStreetMap contributors (ODbL)';
 /** Activity reports are accepted this far outside a requested area so the area can follow the players. */
@@ -73,13 +73,24 @@ const joinUrl = (base, path) => base.replace(/\/?$/, '/') + path.replace(/^\//, 
  *   (as ways tagged {"gamegis:hole_of": "<sourceType>/<sourceId>"}), otherwise dropped (conservative).
  * - MultiPolygon / MultiLineString: one way per part with the same tags.
  * - bbox {south, west, north, east}: keep only features whose bounds intersect it.
+ * - groups: only these feature groups (e.g. ['walkableWays', 'restrictedWays', 'restrictedAreas', 'water']).
+ * - shareNodes (default true): one node per distinct position, like OSM topology — ~30 % fewer elements.
  * Each OSM element appears once even if it belongs to several groups.
+ * For a bounded workload, process sectors (splitBbox) one by one and keep only what each step needs.
  */
-export function toOsmElements(data, {bbox = null, holes = 'drop'} = {}) {
+export function toOsmElements(data, {bbox = null, holes = 'drop', groups = null, shareNodes = true} = {}) {
   let nextId = -1;
   const elements = [];
   const emitted = new Set();
-  const nodeFor = ([lon, lat]) => { const id = nextId--; elements.push({type: 'node', id, lat, lon}); return id; };
+  // shareNodes: one node per distinct position, as in OSM (junctions and shared walls); far fewer elements.
+  const nodeAt = new Map();
+  const nodeFor = ([lon, lat]) => {
+    const k = shareNodes ? `${lon},${lat}` : null;
+    if (k && nodeAt.has(k)) return nodeAt.get(k);
+    const id = nextId--; elements.push({type: 'node', id, lat, lon});
+    if (k) nodeAt.set(k, id);
+    return id;
+  };
   const wayFrom = (id, coords, tags) => {
     const closed = coords.length > 3 && coords[0][0] === coords.at(-1)[0] && coords[0][1] === coords.at(-1)[1];
     const refs = (closed ? coords.slice(0, -1) : coords).map(nodeFor);
@@ -93,7 +104,7 @@ export function toOsmElements(data, {bbox = null, holes = 'drop'} = {}) {
     for (const [lon, lat] of pts) { if (lon < w) w = lon; if (lon > e) e = lon; if (lat < s) s = lat; if (lat > n) n = lat; }
     return {west: w, east: e, south: s, north: n};
   };
-  for (const g of GROUP_NAMES) for (const f of data?.[g] ?? []) {
+  for (const g of GROUP_NAMES) if (!groups || groups.includes(g)) for (const f of data?.[g] ?? []) {
     const {sourceType, sourceId, tags} = f.properties;
     const key = `${sourceType}/${sourceId}`;
     if (emitted.has(key)) continue;
@@ -118,6 +129,29 @@ export function toOsmElements(data, {bbox = null, holes = 'drop'} = {}) {
     }
   }
   return elements;
+}
+
+/**
+ * Status of the z15 tile under a point in an area returned by getArea: 'READY' | 'INCOMPLETE' | 'MISSING', or
+ * 'OUTSIDE' when the point is not in the requested area. area.data holds every feature of the READY tiles of the
+ * loaded bundles (whole geometry, also beyond the request); to PLACE something, check that its spot is READY.
+ */
+export function tileStatusAt(area, lat, lon) {
+  const z = Number(Object.keys(area?.tiles ?? {})[0]?.split('/')[0] ?? 15);
+  const t = tileFor(lat, lon, z);
+  return area?.tiles?.[`${z}/${t.x}/${t.y}`]?.status ?? 'OUTSIDE';
+}
+
+/** Splits a bbox into sectors of about sectorM metres (row by row) for bounded processing. */
+export function splitBbox({south, west, north, east}, sectorM = 500) {
+  const mid = (south + north) / 2;
+  const rows = Math.max(1, Math.ceil((north - south) * 111320 / sectorM));
+  const cols = Math.max(1, Math.ceil((east - west) * 111320 * Math.cos(mid * Math.PI / 180) / sectorM));
+  const out = [];
+  for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) out.push({
+    south: south + (north - south) * r / rows, north: south + (north - south) * (r + 1) / rows,
+    west: west + (east - west) * c / cols, east: west + (east - west) * (c + 1) / cols});
+  return out;
 }
 
 /**
