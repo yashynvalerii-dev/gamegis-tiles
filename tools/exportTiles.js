@@ -90,6 +90,9 @@ export function runConfig(o, {log = console.log} = {}) {
   }
   const manifest = mergeManifests(parts);
   if (preciseParts.length) manifest.precise = mergePreciseLayers(preciseParts);
+  // Public copies of this site, primary first (TILES_SITE_URL comes from the workflow, extra ones from the config).
+  const mirrorList = [process.env.TILES_SITE_URL, ...(config.mirrors ?? [])].filter(u => typeof u === 'string' && /^https:\/\/\S+\/$/.test(u));
+  if (mirrorList.length) manifest.mirrors = [...new Set(mirrorList)];
   if (config.regionRequests?.endpoint) {
     // public: where clients send region requests and activity (contract v1, see gamegis-client.js)
     manifest.regionRequests = {type: 'endpoint', version: 1, url: config.regionRequests.endpoint};

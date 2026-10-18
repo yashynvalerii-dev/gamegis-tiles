@@ -24,6 +24,9 @@ concurrency:
   cancel-in-progress: false
 jobs:
   build:
+    env:
+      HAS_CLOUDFLARE: ${{ secrets.CLOUDFLARE_API_TOKEN != '' && secrets.CLOUDFLARE_ACCOUNT_ID != '' }}
+      TILES_SITE_URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/
     runs-on: ubuntu-24.04   # pinned: ubuntu-latest moves to 26.04 from 2026-10-19; upgrade after a test run
     timeout-minutes: 150
     steps:
@@ -69,6 +72,19 @@ jobs:
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site
+      - name: Mirror to Cloudflare Pages (when its secrets are set; never blocks the main site)
+        if: env.HAS_CLOUDFLARE == 'true'
+        continue-on-error: true
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          npx --yes wrangler@4 pages project create gamegis-tiles --production-branch main >/dev/null 2>&1 || true
+          npx --yes wrangler@4 pages deploy site --project-name gamegis-tiles --branch main --commit-dirty=true | tee /tmp/cf.log
+          sleep 20
+          want=$(sha256sum site/manifest.json | cut -d' ' -f1)
+          got=$(curl -fsS "https://gamegis-tiles.pages.dev/manifest.json?v=${{ github.run_id }}" | sha256sum | cut -d' ' -f1 || true)
+          if [ "$want" = "$got" ]; then echo "::notice::Cloudflare mirror matches this build"; else echo "::warning::Cloudflare mirror manifest differs (see deploy log for the real address)"; grep -o 'https://[^ ]*pages.dev[^ ]*' /tmp/cf.log | head -3 | sed 's/^/::notice::deployed to /'; fi
   deploy:
     needs: build
     runs-on: ubuntu-24.04   # pinned: ubuntu-latest moves to 26.04 from 2026-10-19; upgrade after a test run

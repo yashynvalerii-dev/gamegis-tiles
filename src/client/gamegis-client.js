@@ -139,6 +139,12 @@ export function createTileClient({mirrors, fetchImpl = globalThis.fetch, timeout
   requestEndpoints = []} = {}) {
   if (!Array.isArray(mirrors) || !mirrors.length) throw new TypeError('mirrors: at least one base URL is required');
   let manifestPromise = null;
+  // The game's mirrors first; mirrors announced by a manifest (manifest.mirrors) are appended once learned.
+  // Bundles are always checked against the manifest's SHA-256, so a mirror cannot alter data.
+  const known = [...mirrors];
+  const learn = list => { for (const u of Array.isArray(list) ? list : []) {
+    if (typeof u === 'string' && /^https:\/\/[^\s]+\/$/.test(u) && !known.includes(u)) known.push(u);
+  } };
   const memory = new Map(); // bundle key -> parsed bundle (per session)
   const log = [];           // recent delivery events, useful for game diagnostics
 
@@ -156,13 +162,14 @@ export function createTileClient({mirrors, fetchImpl = globalThis.fetch, timeout
   function getManifest({refresh = false} = {}) {
     if (!manifestPromise || refresh) manifestPromise = (async () => {
       const errors = [];
-      for (const base of mirrors) {
+      for (const base of known) {
         try {
           const res = await timedFetch(joinUrl(base, 'manifest.json'), {cache: 'no-cache'});
           if (!res.ok) { errors.push(`${base}: HTTP ${res.status}`); continue; }
           const m = await res.json();
           if (!SUPPORTED_MANIFESTS.includes(m.format)) { errors.push(`${base}: unsupported ${m.format}`); continue; }
           log.push({event: 'manifest', mirror: base, dataTimestamp: m.dataTimestamp});
+          learn(m.mirrors);
           return m;
         } catch (e) { errors.push(`${base}: ${e.name === 'AbortError' ? 'timeout' : e.message}`); }
       }
@@ -194,7 +201,7 @@ export function createTileClient({mirrors, fetchImpl = globalThis.fetch, timeout
     }
     if (bytes && (await sha256Hex(bytes)) !== entry.sha256) bytes = null;
     const errors = [];
-    if (!bytes) for (const base of mirrors) {
+    if (!bytes) for (const base of known) {
       try {
         const res = await timedFetch(joinUrl(base, path));
         if (!res.ok) { errors.push(`${base}: HTTP ${res.status}`); continue; }
@@ -324,5 +331,5 @@ export function createTileClient({mirrors, fetchImpl = globalThis.fetch, timeout
   }
   const activity = new Map();
 
-  return {getManifest, getBundle, getArea, requestRegion, reportActivity, log};
+  return {getManifest, getBundle, getArea, requestRegion, reportActivity, log, mirrors: () => [...known]};
 }

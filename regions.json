@@ -17,6 +17,10 @@
     "marginKm": 3,
     "reachKm": 8
   },
+  "_comment_mirrors": "Public copies of the tile site besides GitHub Pages (listed in manifest.mirrors; games fail over automatically).",
+  "mirrors": [
+    "https://gamegis-tiles.pages.dev/"
+  ],
   "regions": [
     {
       "id": "thueringen",
