@@ -22,6 +22,8 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: '24'
+      - name: Report which optional secrets are set (values never printed)
+        run: echo "::notice::secrets set - requests:${{ secrets.REQUESTS_CSV_URL != '' }} cloudflare-token:${{ secrets.CLOUDFLARE_API_TOKEN != '' }} cloudflare-account:${{ secrets.CLOUDFLARE_ACCOUNT_ID != '' }}"
       - id: plan
         name: Plan regions from requests
         env:
