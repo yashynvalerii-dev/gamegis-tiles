@@ -15,15 +15,25 @@
  *   const tiles = createTileClient({mirrors: ['https://<owner>.github.io/gamegis-tiles/']});
  *   const area = await tiles.getArea({lat: 51.0102, lon: 11.0036, radiusM: 500});
  *   if (area.status === 'READY') use(area.data.walkableWays, area.data.buildings, ...);
+ *   // area.data.pois (client >= 1.3, sites with manifest.poiLayer): points of interest, properties {class: 'poi',
+ *   // poiKind, name?, tags, sourceType, sourceId}; older sites simply return an empty list.
  *
  * Map data © OpenStreetMap contributors (ODbL). Applications must show this attribution.
  */
-export const CLIENT_VERSION = '1.2.0'; // 1.1: request endpoint v1, precise layers, manifest mirrors; 1.2: shared nodes, groups, tileStatusAt, splitBbox
+export const CLIENT_VERSION = '1.3.0'; // 1.1: request endpoint v1, precise layers, manifest mirrors; 1.2: shared nodes, groups, tileStatusAt, splitBbox; 1.3: POI group
+/**
+ * poiKind vocabulary of POI layer v1 (manifest.poiLayer.version). Stable: values are only ever ADDED, never renamed or
+ * removed — skip a kind you do not know instead of failing.
+ */
+export const POI_KINDS = Object.freeze(['tourism=artwork', 'tourism=viewpoint', 'tourism=attraction',
+  'historic=memorial', 'historic=monument', 'historic=wayside_cross', 'historic=wayside_shrine', 'historic=boundary_stone',
+  'historic=ruins', 'amenity=fountain', 'amenity=drinking_water', 'amenity=place_of_worship', 'man_made=tower',
+  'man_made=water_tower', 'man_made=obelisk', 'natural=peak', 'natural=tree']);
 export const SUPPORTED_MANIFESTS = ['GAMEGIS_TILE_MANIFEST_V2'];
 export const ATTRIBUTION = '© OpenStreetMap contributors (ODbL)';
 /** Activity reports are accepted this far outside a requested area so the area can follow the players. */
 export const ACTIVITY_REACH_KM = 8;
-const GROUP_NAMES = ['walkableWays', 'buildings', 'entrances', 'water', 'railways', 'power', 'restrictedAreas', 'restrictedWays'];
+const GROUP_NAMES = ['walkableWays', 'buildings', 'entrances', 'water', 'railways', 'power', 'restrictedAreas', 'restrictedWays', 'pois'];
 
 /** Web Mercator tile of a position. */
 export function tileFor(lat, lon, z) {
@@ -76,6 +86,8 @@ const joinUrl = (base, path) => base.replace(/\/?$/, '/') + path.replace(/^\//, 
  * - groups: only these feature groups (e.g. ['walkableWays', 'restrictedWays', 'restrictedAreas', 'water']).
  * - shareNodes (default true): one node per distinct position, like OSM topology — ~30 % fewer elements.
  * Each OSM element appears once even if it belongs to several groups.
+ * - pois: one node per POI with a NEW negative id (the object may also be a building or an entrance) and tags
+ *   {<kind key>: <value>, name?, "gamegis:source": "<sourceType>/<sourceId>"}.
  * For a bounded workload, process sectors (splitBbox) one by one and keep only what each step needs.
  */
 export function toOsmElements(data, {bbox = null, holes = 'drop', groups = null, shareNodes = true} = {}) {
@@ -106,7 +118,7 @@ export function toOsmElements(data, {bbox = null, holes = 'drop', groups = null,
   };
   for (const g of GROUP_NAMES) if (!groups || groups.includes(g)) for (const f of data?.[g] ?? []) {
     const {sourceType, sourceId, tags} = f.properties;
-    const key = `${sourceType}/${sourceId}`;
+    const key = g === 'pois' ? `poi:${sourceType}/${sourceId}` : `${sourceType}/${sourceId}`;
     if (emitted.has(key)) continue;
     const geom = f.geometry;
     if (bbox) {
@@ -114,7 +126,10 @@ export function toOsmElements(data, {bbox = null, holes = 'drop', groups = null,
       if (b.west > bbox.east || b.east < bbox.west || b.south > bbox.north || b.north < bbox.south) continue;
     }
     emitted.add(key);
-    if (geom.type === 'Point') {
+    if (g === 'pois') {
+      elements.push({type: 'node', id: nextId--, lat: geom.coordinates[1], lon: geom.coordinates[0],
+        tags: {...tags, 'gamegis:source': `${sourceType}/${sourceId}`}});
+    } else if (geom.type === 'Point') {
       elements.push({type: 'node', id: sourceType === 'node' ? sourceId : nextId--, lat: geom.coordinates[1], lon: geom.coordinates[0], tags: {...tags}});
     } else if (geom.type === 'LineString') {
       wayFrom(sourceType === 'way' ? sourceId : nextId--, geom.coordinates, tags);

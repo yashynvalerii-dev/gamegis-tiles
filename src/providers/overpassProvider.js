@@ -26,14 +26,22 @@ function outwardScope(tile,bufferM){
   if(!bboxContainsBbox(scope,b)) throw new Error('QUERY_BBOX_NOT_CONTAINING_BUFFER');
   return scope;
 }
+// POI layer (normalizer V6): candidate objects and the areas that exclude them (classifier.js is the authority).
+const POI_SELECTORS = Object.freeze([
+  '["tourism"~"^(artwork|viewpoint|attraction)$"]',
+  '["historic"~"^(memorial|monument|wayside_cross|wayside_shrine|boundary_stone|ruins)$"]',
+  '["amenity"~"^(fountain|drinking_water|place_of_worship)$"]',
+  '["man_made"~"^(tower|water_tower|obelisk)$"]', '["natural"="peak"]', '["natural"="tree"]["denotation"="natural_monument"]',
+]);
+const POI_EXCLUSION_SELECTORS = Object.freeze(['["landuse"~"^(cemetery|railway)$"]', '["amenity"~"^(grave_yard|school|kindergarten|childcare)$"]']);
 export function buildOverpassQuery({tile,bufferM=40,timeoutSec=25}={}){
   const t=validateTile(tile);
   if(!Number.isInteger(bufferM)||bufferM<30||bufferM>1000)throw new RangeError('bufferM must be integer 30..1000');
   if(!Number.isInteger(timeoutSec)||timeoutSec<1||timeoutSec>25)throw new RangeError('timeoutSec must be 1..25');
   const bbox=outwardScope(t,bufferM);
   const coords=[bbox.south,bbox.west,bbox.north,bbox.east].map(f7).join(',');
-  const clauses=['node["entrance"]','node["power"~"^(tower|pole|substation)$"]'];
-  for(const kind of ['way','relation']) for(const selector of SELECTORS)clauses.push(kind+selector);
+  const clauses=['node["entrance"]','node["power"~"^(tower|pole|substation)$"]',...POI_SELECTORS.map(x=>'node'+x)];
+  for(const kind of ['way','relation']) for(const selector of [...SELECTORS,...POI_SELECTORS,...POI_EXCLUSION_SELECTORS])clauses.push(kind+selector);
   const query=`[out:json][timeout:${timeoutSec}];(\n${clauses.map(x=>`  ${x}(${coords});`).join('\n')}\n);out body geom;`;
   return {query,bbox,tile:t,bufferM,timeoutSec,datasetId:DATASET_ID,normalizationVersion:NORMALIZATION_VERSION};
 }

@@ -7,14 +7,19 @@
  * Missing relevant geometry and unsupported relevant relations fail CLOSED:
  * result.diagnostics.complete=false; future coverage MUST NOT mark such tiles READY.
  */
-import { assertPosition, pointInPolygon } from './geometry.js';
-import { classifyWayTags, isEntranceTags, isPowerPointTags, requiresRelationSupport } from './classifier.js';
+import { assertPosition, pointInPolygon, pointOnSurface } from './geometry.js';
+import { classifyWayTags, isEntranceTags, isPowerPointTags, requiresRelationSupport, poiKindFor, POI_KINDS,
+  isPoiExclusionAreaTags } from './classifier.js';
 
 export const DATASET_ID = 'OSM_MVP_BASE_V1'; // layer set is identified by NORMALIZATION_VERSION (V3 adds POWER)
-export const NORMALIZATION_VERSION = 'OSM_NORMALIZER_V5'; // V2: multipolygons; V3: power + tag allowlist; V4: site perimeters, linear military, building-on-road fix; V5: relation members of multipolygons skipped
+export const NORMALIZATION_VERSION = 'OSM_NORMALIZER_V6'; // V2: multipolygons; V3: power + tag allowlist; V4: site perimeters, linear military, building-on-road fix; V5: relation members of multipolygons skipped; V6: POI layer
 export const PROCESSED_LAYERS = Object.freeze([
   'WALKABLE', 'BUILDINGS', 'ENTRANCES', 'WATER', 'RAILWAYS', 'POWER',
 ]);
+/** Layers that never make a tile INCOMPLETE: a missing POI is a missing extra, not a safety gap. */
+export const SUPPLEMENTARY_LAYERS = Object.freeze(['POIS']);
+export const POI_LAYER_VERSION = 1;
+export const MAX_POIS_PER_TILE = 200;
 
 /**
  * Only geography/accessibility tags are published; metadata (addresses, sources, notes, contacts,
@@ -43,6 +48,7 @@ const LAYER_FOR_CLASS = Object.freeze({
   power: 'power',
   restricted_area: 'restrictedAreas',
   restricted_way: 'restrictedWays',
+  poi: 'pois',
 });
 const POLYGON_CLASSES = new Set(['building', 'water', 'restricted_area']);
 
@@ -267,7 +273,7 @@ export function normalizeOsmMvpBase(payload, { provider } = {}) {
 
   const layers = {
     walkableWays: [], buildings: [], entrances: [], water: [], railways: [], power: [],
-    restrictedAreas: [], restrictedWays: [],
+    restrictedAreas: [], restrictedWays: [], pois: [],
   };
   const features = [];
   const makeFeature = (sourceType, sourceId, featureClass, geometry, tags) => {
@@ -278,7 +284,7 @@ export function normalizeOsmMvpBase(payload, { provider } = {}) {
       featureClass,
       geometry,
       bbox: boundsFor(geometry),
-      tags: publishedTags(safeTags(tags)),
+      tags: featureClass === 'poi' ? tags : publishedTags(safeTags(tags)),
       normalizationVersion: NORMALIZATION_VERSION,
     };
     features.push(feature);
@@ -364,6 +370,8 @@ export function normalizeOsmMvpBase(payload, { provider } = {}) {
     }
   }
 
+  const poiStats = normalizePois({ nodeElements, nodes, ways, relations, wayById, layers, makeFeature, warnings });
+
   return {
     datasetId: DATASET_ID,
     normalizationVersion: NORMALIZATION_VERSION,
@@ -377,6 +385,7 @@ export function normalizeOsmMvpBase(payload, { provider } = {}) {
       normalizedWayCount, ignoredWayCount, brokenRelevantWayCount,
       unsupportedRelevantRelationCount, assembledMultipolygonCount,
       featureCount: features.length,
+      ...poiStats,
     },
     diagnostics: {
       complete: errors.length === 0,
@@ -386,4 +395,76 @@ export function normalizeOsmMvpBase(payload, { provider } = {}) {
       limitations: ['OSM_RELATION_MEMBERS_OF_MULTIPOLYGONS_IGNORED'],
     },
   };
+}
+
+/** Published tags of a POI: its kind as an OSM tag plus the name, nothing else. */
+function poiTags(kind, tags) {
+  const [k, v] = kind.split('=');
+  const name = String(tags?.name ?? '').trim();
+  return name ? { [k]: v, name } : { [k]: v };
+}
+
+function wayPolygon(way, nodes) {
+  const geo = wayCoordinates(way, nodes);
+  if (geo.error || !isValidClosedRing(geo.coordinates)) return null;
+  return { type: 'Polygon', coordinates: [geo.coordinates.map((p) => [...p])] };
+}
+
+function relationPolygon(relation, wayById, nodes) {
+  const mp = assembleMultipolygon(relation, wayById, nodes);
+  if (mp.error) return null;
+  return mp.polygons.length === 1 ? { type: 'Polygon', coordinates: mp.polygons[0] } : { type: 'MultiPolygon', coordinates: mp.polygons };
+}
+
+/**
+ * POI layer (contract poiLayer v1): one point per object; areas give a point INSIDE their outline, open ways their
+ * middle vertex. POIs inside restricted areas or POI exclusion areas (cemeteries, schools, kindergartens, railway
+ * land) are dropped. Geometry problems are warnings only: POIs never make a tile incomplete.
+ */
+function normalizePois({ nodeElements, nodes, ways, relations, wayById, layers, makeFeature, warnings }) {
+  const exclusions = layers.restrictedAreas.map((f) => f.geometry);
+  for (const way of ways) if (isPoiExclusionAreaTags(way.tags)) { const g = wayPolygon(way, nodes); if (g) exclusions.push(g); }
+  for (const rel of relations) {
+    if (!isPoiExclusionAreaTags(rel.tags) || String(rel.tags?.type ?? '').toLowerCase() !== 'multipolygon') continue;
+    const g = relationPolygon(rel, wayById, nodes); if (g) exclusions.push(g);
+  }
+  const candidates = [];
+  for (const el of nodeElements) {
+    const kind = poiKindFor(el.tags); const pos = kind && nodes.get(el.id);
+    if (pos) candidates.push({ sourceType: 'node', sourceId: el.id, kind, tags: el.tags, point: [...pos] });
+  }
+  for (const way of ways) {
+    const kind = poiKindFor(way.tags); if (!kind) continue;
+    const geo = wayCoordinates(way, nodes);
+    if (geo.error) { warnings.push({ code: 'POI_GEOMETRY_UNAVAILABLE', sourceType: 'way', sourceId: way.id }); continue; }
+    const c = geo.coordinates;
+    const point = isValidClosedRing(c) ? pointOnSurface({ type: 'Polygon', coordinates: [c] }) : [...c[Math.floor((c.length - 1) / 2)]];
+    candidates.push({ sourceType: 'way', sourceId: way.id, kind, tags: way.tags, point });
+  }
+  for (const rel of relations) {
+    const kind = poiKindFor(rel.tags); if (!kind) continue;
+    const type = String(rel.tags?.type ?? '').toLowerCase();
+    const g = type === 'multipolygon' ? relationPolygon(rel, wayById, nodes) : null;
+    if (!g) { warnings.push({ code: 'POI_GEOMETRY_UNAVAILABLE', sourceType: 'relation', sourceId: rel.id }); continue; }
+    candidates.push({ sourceType: 'relation', sourceId: rel.id, kind, tags: rel.tags, point: pointOnSurface(g) });
+  }
+  let excluded = 0;
+  for (const c of candidates) {
+    if (exclusions.some((g) => pointInPolygon(c.point, g))) { excluded++; continue; }
+    makeFeature(c.sourceType, c.sourceId, 'poi', { type: 'Point', coordinates: c.point }, poiTags(c.kind, c.tags));
+  }
+  return { poiCount: layers.pois.length, poiExcludedCount: excluded };
+}
+
+/** Keeps at most `max` POIs: named first, then in POI_KINDS order, then by id (stable). Returns {kept, trimmed}. */
+export function limitPois(pois, max = MAX_POIS_PER_TILE) {
+  if (pois.length <= max) return { kept: pois, trimmed: 0 };
+  const rank = (f) => {
+    const t = f.tags ?? f.properties?.tags ?? {};
+    const kind = Object.entries(t).find(([k]) => k !== 'name');
+    return [t.name ? 0 : 1, kind ? POI_KINDS.indexOf(`${kind[0]}=${kind[1]}`) : 99];
+  };
+  const id = (f) => `${f.sourceType ?? f.properties?.sourceType}/${String(f.sourceId ?? f.properties?.sourceId).padStart(12, '0')}`;
+  const sorted = [...pois].sort((a, b) => { const [a1, a2] = rank(a), [b1, b2] = rank(b); return a1 - b1 || a2 - b2 || (id(a) < id(b) ? -1 : 1); });
+  return { kept: sorted.slice(0, max), trimmed: pois.length - max };
 }

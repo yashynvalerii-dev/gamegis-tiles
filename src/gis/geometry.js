@@ -228,3 +228,39 @@ export function pointInPolygon(point, geometry) {
   }
   return false;
 }
+
+/**
+ * A position guaranteed to lie inside a Polygon/MultiPolygon (largest part by outer-ring area): the centroid when it
+ * is inside, otherwise the middle of the widest horizontal chord. Used to publish an area as one point.
+ */
+export function pointOnSurface(geometry) {
+  const parts = geometry.type === 'Polygon' ? [geometry.coordinates] : geometry.type === 'MultiPolygon' ? geometry.coordinates : null;
+  if (!parts?.length) throw new TypeError('pointOnSurface expects a Polygon or MultiPolygon');
+  const shoelace = (ring) => { let s = 0; for (let i = 1; i < ring.length; i++) s += ring[i - 1][0] * ring[i][1] - ring[i][0] * ring[i - 1][1]; return s / 2; };
+  const rings = parts.reduce((best, p) => (Math.abs(shoelace(p[0])) > Math.abs(shoelace(best[0])) ? p : best));
+  const part = { type: 'Polygon', coordinates: rings };
+  const outer = rings[0], a = shoelace(outer);
+  if (Math.abs(a) > 0) {
+    let cx = 0, cy = 0;
+    for (let i = 1; i < outer.length; i++) {
+      const [x0, y0] = outer[i - 1], [x1, y1] = outer[i], f = x0 * y1 - x1 * y0;
+      cx += (x0 + x1) * f; cy += (y0 + y1) * f;
+    }
+    const c = [cx / (6 * a), cy / (6 * a)];
+    if (Number.isFinite(c[0]) && Number.isFinite(c[1]) && pointInPolygon(c, part)) return c;
+  }
+  let minY = Infinity, maxY = -Infinity;
+  for (const [, y] of outer) { minY = Math.min(minY, y); maxY = Math.max(maxY, y); }
+  for (const f of [0.5, 0.25, 0.75, 0.125, 0.375, 0.625, 0.875, 0.0625, 0.9375]) {
+    const y = minY + (maxY - minY) * f, xs = [];
+    for (const ring of rings) for (let i = 1; i < ring.length; i++) {
+      const [x0, y0] = ring[i - 1], [x1, y1] = ring[i];
+      if ((y0 > y) !== (y1 > y)) xs.push(x0 + (y - y0) / (y1 - y0) * (x1 - x0));
+    }
+    xs.sort((p, q) => p - q);
+    let best = null;
+    for (let i = 0; i + 1 < xs.length; i += 2) if (!best || xs[i + 1] - xs[i] > best[1] - best[0]) best = [xs[i], xs[i + 1]];
+    if (best) { const p = [(best[0] + best[1]) / 2, y]; if (pointInPolygon(p, part)) return p; }
+  }
+  return [...outer[0]];
+}

@@ -19,8 +19,8 @@ import {gzipSync} from 'node:zlib';
 import {scanPbf} from '../providers/pbfReader.js';
 import {buildOverpassQuery} from '../providers/overpassProvider.js';
 import {segmentIntersectsBox} from '../gis/bbox.js';
-import {classifyWayTags, isPointFeatureTags, requiresRelationSupport} from '../gis/classifier.js';
-import {normalizeOsmMvpBase, DATASET_ID, NORMALIZATION_VERSION} from '../gis/normalizer.js';
+import {classifyWayTags, isPointFeatureTags, isPoiRelatedTags, requiresRelationSupport} from '../gis/classifier.js';
+import {normalizeOsmMvpBase, DATASET_ID, NORMALIZATION_VERSION, POI_LAYER_VERSION, MAX_POIS_PER_TILE, limitPois} from '../gis/normalizer.js';
 import {tileForPoint, boundsForTile, tileId, bboxContainsBbox} from '../core/tileGrid.js';
 import {makeRegion} from '../providers/polyFile.js';
 
@@ -29,11 +29,11 @@ export const MANIFEST_FORMAT = 'GAMEGIS_TILE_MANIFEST_V2'; // V2: gzip-stored bu
 export const BUNDLE_PATH_TEMPLATE = 'bundles/{z}/{x}/{y}.json.gz';
 export const TILE_ZOOM = 15;
 const GROUPS = {walkable: 'walkableWays', building: 'buildings', entrance: 'entrances', water: 'water',
-  railway: 'railways', power: 'power', restricted_area: 'restrictedAreas', restricted_way: 'restrictedWays'};
-const emptyGroups = () => ({walkableWays: [], buildings: [], entrances: [], water: [], railways: [], power: [], restrictedAreas: [], restrictedWays: []});
+  railway: 'railways', power: 'power', restricted_area: 'restrictedAreas', restricted_way: 'restrictedWays', poi: 'pois'};
+const emptyGroups = () => ({walkableWays: [], buildings: [], entrances: [], water: [], railways: [], power: [], restrictedAreas: [], restrictedWays: [], pois: []});
 
-const isRelevantWay = tags => classifyWayTags(tags).length > 0;
-const isRelevantRelation = tags => requiresRelationSupport(tags) || classifyWayTags(tags).length > 0;
+const isRelevantWay = tags => classifyWayTags(tags).length > 0 || isPoiRelatedTags(tags);
+const isRelevantRelation = tags => requiresRelationSupport(tags) || classifyWayTags(tags).length > 0 || isPoiRelatedTags(tags);
 const inBox = (b, lat, lon) => lat >= b.south && lat <= b.north && lon >= b.west && lon <= b.east;
 const intersects = (a, b) => a.west <= b.east && a.east >= b.west && a.south <= b.north && a.north >= b.south;
 
@@ -309,9 +309,10 @@ export function exportRegion({model, outDir, boundary, publish = null, bundleZoo
   const manifest = {format: MANIFEST_FORMAT, datasetId: DATASET_ID, normalizationVersion: NORMALIZATION_VERSION,
     provider: 'GEOFABRIK_EXTRACT', dataTimestamp, generatedAt, tileZoom: TILE_ZOOM, bundleZoom, bufferM,
     bundlePath: `${bundlesDir}/{z}/{x}/{y}.json.gz`, bundleEncoding: 'gzip',
-    license: 'ODbL 1.0 — © OpenStreetMap contributors', bundles: {}};
+    license: 'ODbL 1.0 — © OpenStreetMap contributors', poiLayer: {version: POI_LAYER_VERSION, maxPerTile: MAX_POIS_PER_TILE},
+    bundles: {}};
   const stats = {bundles: 0, files: 0, bytes: 0, gzipBytes: 0, maxBundleBytes: 0, maxBundleGzipBytes: 0,
-    tiles: {READY: 0, INCOMPLETE: 0}, incompleteReasons: {}, features: 0};
+    tiles: {READY: 0, INCOMPLETE: 0}, incompleteReasons: {}, features: 0, pois: 0, poisTrimmed: 0};
   let lastLog = Date.now();
   const bundleXs = [nw.x >> shift, se.x >> shift], bundleYs = [nw.y >> shift, se.y >> shift];
   const totalBundles = (bundleXs[1] - bundleXs[0] + 1) * (bundleYs[1] - bundleYs[0] + 1);
@@ -341,11 +342,23 @@ export function exportRegion({model, outDir, boundary, publish = null, bundleZoo
         }
         tilesOut[id] = {status: 'READY'};
         const tb = boundsForTile(tile);
+        // POIs belong to the tile that contains their point; capped per tile (named and higher kinds first).
+        const tilePois = limitPois(normalized.layers.pois.filter(f => featureBoxIntersects(f, tb) && !seen.has(`${f.sourceType}/${f.sourceId}/poi`)));
+        if (tilePois.trimmed) { tilesOut[id].poisTrimmed = tilePois.trimmed; stats.poisTrimmed += tilePois.trimmed; }
+        const keptPois = new Set(tilePois.kept);
         for (const f of normalized.features) {
+          if (f.featureClass === 'poi' && !keptPois.has(f)) continue;
           if (!featureBoxIntersects(f, tb)) continue;
           const key = `${f.sourceType}/${f.sourceId}/${f.featureClass}`;
           if (seen.has(key)) continue;
           seen.add(key);
+          if (f.featureClass === 'poi') {
+            const [poiKind] = Object.entries(f.tags).filter(([k]) => k !== 'name').map(([k, v]) => `${k}=${v}`);
+            stats.pois++;
+            groups.pois.push({type: 'Feature', geometry: roundGeometry(f.geometry, coordDecimals), properties: {class: 'poi', poiKind,
+              ...(f.tags.name ? {name: f.tags.name} : {}), tags: f.tags, sourceType: f.sourceType, sourceId: f.sourceId}});
+            continue;
+          }
           groups[GROUPS[f.featureClass]].push({type: 'Feature', geometry: roundGeometry(f.geometry, coordDecimals),
             properties: {tags: f.tags, sourceType: f.sourceType, sourceId: f.sourceId}});
         }

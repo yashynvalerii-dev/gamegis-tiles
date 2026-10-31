@@ -62,9 +62,54 @@ export function isPowerPointTags(tags = {}) {
   return POWER_POINTS.has(value(tags, 'power'));
 }
 
+/**
+ * Points of interest (POI layer, contract poiLayer v1, owner 2026-10-31). The order is the priority used when a tile
+ * holds more POIs than the per-tile cap. poiKind strings are a STABLE vocabulary: only additions, never renames.
+ */
+export const POI_KINDS = Object.freeze([
+  'tourism=artwork', 'tourism=viewpoint', 'tourism=attraction',
+  'historic=memorial', 'historic=monument', 'historic=wayside_cross', 'historic=wayside_shrine',
+  'historic=boundary_stone', 'historic=ruins',
+  'amenity=fountain', 'amenity=drinking_water', 'amenity=place_of_worship',
+  'man_made=tower', 'man_made=water_tower', 'man_made=obelisk',
+  'natural=peak', 'natural=tree',
+]);
+const POI_KIND_SET = new Set(POI_KINDS);
+const POI_KEYS = ['tourism', 'historic', 'amenity', 'man_made', 'natural'];
+
+/**
+ * The poiKind of an OSM object, or null. Excluded on purpose: benches, playgrounds, parks, cemeteries, schools and
+ * kindergartens (not in the list), Stolpersteine (memorial plaques in front of homes), unnamed attractions, ordinary
+ * trees (only natural monuments), private or closed objects and anything on railway land.
+ */
+export function poiKindFor(tags = {}) {
+  if (['private', 'no'].includes(value(tags, 'access')) || active(tags, 'railway')) return null;
+  for (const key of POI_KEYS) {
+    const kind = `${key}=${value(tags, key)}`;
+    if (!POI_KIND_SET.has(kind)) continue;
+    if (kind === 'historic=memorial' && value(tags, 'memorial') === 'stolperstein') return null;
+    if (kind === 'tourism=attraction' && !String(tags.name ?? '').trim()) continue;
+    if (kind === 'natural=tree' && value(tags, 'denotation') !== 'natural_monument') continue;
+    return kind;
+  }
+  return null;
+}
+export const isPoiTags = (tags = {}) => poiKindFor(tags) !== null;
+
+/** Areas where no POI is published even if a POI lies inside (in addition to restricted areas). */
+export function isPoiExclusionAreaTags(tags = {}) {
+  return ['cemetery', 'railway'].includes(value(tags, 'landuse')) ||
+    ['grave_yard', 'school', 'kindergarten', 'childcare'].includes(value(tags, 'amenity'));
+}
+
 /** Nodes published as standalone point features. */
 export function isPointFeatureTags(tags = {}) {
-  return isEntranceTags(tags) || isPowerPointTags(tags);
+  return isEntranceTags(tags) || isPowerPointTags(tags) || isPoiTags(tags);
+}
+
+/** Ways / relations to keep when reading an extract: base classes, POIs and POI exclusion areas. */
+export function isPoiRelatedTags(tags = {}) {
+  return isPoiTags(tags) || isPoiExclusionAreaTags(tags);
 }
 
 /** OSM way roles, no game placement decisions or implicit distance buffers. */
