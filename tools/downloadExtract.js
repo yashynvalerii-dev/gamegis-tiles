@@ -42,6 +42,17 @@ export async function withRetry(fn, {label = 'download', delaysS = [15, 60, 180]
     }
   }
 }
+/**
+ * Aborts a transfer that stops delivering data for idleMs (a stalled connection would otherwise hang the build until
+ * the job timeout). touch() on every chunk; done() when finished. The abort is transient, so withRetry tries again.
+ */
+export function idleAbort(idleMs = 120000) {
+  const controller = new AbortController();
+  let timer;
+  const touch = () => { clearTimeout(timer); timer = setTimeout(() => controller.abort(new Error(`no data for ${idleMs / 1000} s`)), idleMs); };
+  touch();
+  return {signal: controller.signal, touch, done: () => clearTimeout(timer)};
+}
 const httpError = (what, status) => Object.assign(new Error(`${what}: HTTP ${status}`), {permanent: status === 404 || status === 403 || status === 410});
 
 /** YYMMDD for a date (Geofabrik dated snapshot names). */
@@ -71,19 +82,26 @@ async function downloadExtract(region) {
   const target = join(dir, `${name}-latest.osm.pbf`), part = target + '.part';
   const {url, expected} = await pickSource(region);
   console.log(`Downloading ${url}`);
-  const res = await fetch(url, {headers: UA});
-  if (!res.ok || !res.body) throw httpError('Download failed', res.status);
-  const total = Number(res.headers.get('content-length')) || 0;
-  let got = 0, shown = 0;
-  const counter = new TransformStream({transform(chunk, ctl) {
-    got += chunk.byteLength;
-    if (got - shown > 100 * 1024 * 1024) {
-      shown = got;
-      console.log(`  ${(got / 1048576).toFixed(0)} MB${total ? ` / ${(total / 1048576).toFixed(0)} MB` : ''}`);
-    }
-    ctl.enqueue(chunk);
-  }});
-  await pipeline(Readable.fromWeb(res.body.pipeThrough(counter)), createWriteStream(part));
+  const idle = idleAbort();
+  try {
+    const res = await fetch(url, {headers: UA, signal: idle.signal});
+    if (!res.ok || !res.body) throw httpError('Download failed', res.status);
+    const total = Number(res.headers.get('content-length')) || 0;
+    let got = 0, shown = 0;
+    const counter = new TransformStream({transform(chunk, ctl) {
+      got += chunk.byteLength;
+      idle.touch();
+      if (got - shown > 100 * 1024 * 1024) {
+        shown = got;
+        console.log(`  ${(got / 1048576).toFixed(0)} MB${total ? ` / ${(total / 1048576).toFixed(0)} MB` : ''}`);
+      }
+      ctl.enqueue(chunk);
+    }});
+    await pipeline(Readable.fromWeb(res.body.pipeThrough(counter)), createWriteStream(part), {signal: idle.signal});
+  } catch (e) {
+    if (idle.signal.aborted) throw new Error(`Download stalled: ${idle.signal.reason?.message ?? 'aborted'}`);
+    throw e;
+  } finally { idle.done(); }
   const actual = await md5Of(part);
   if (actual !== expected) { rmSync(part, {force: true}); throw new Error(`MD5 mismatch for ${name} (expected ${expected}, got ${actual}); file deleted`); }
   renameSync(part, target);
