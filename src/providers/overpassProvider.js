@@ -33,7 +33,8 @@ const POI_SELECTORS = Object.freeze([
   '["amenity"~"^(fountain|drinking_water|place_of_worship)$"]',
   '["man_made"~"^(tower|water_tower|obelisk)$"]', '["natural"="peak"]', '["natural"="tree"]["denotation"="natural_monument"]',
 ]);
-const POI_EXCLUSION_SELECTORS = Object.freeze(['["landuse"~"^(cemetery|railway)$"]', '["amenity"~"^(grave_yard|school|kindergarten|childcare)$"]']);
+const POI_EXCLUSION_SELECTORS = Object.freeze(['["landuse"~"^(cemetery|railway)$"]', '["amenity"~"^(grave_yard|school|kindergarten|childcare)$"]',
+  '["highway"~"^(motorway|trunk|primary|secondary|tertiary)(_link)?$"]', '["waterway"~"^(river|canal)$"]']);
 export function buildOverpassQuery({tile,bufferM=40,timeoutSec=25}={}){
   const t=validateTile(tile);
   if(!Number.isInteger(bufferM)||bufferM<30||bufferM>1000)throw new RangeError('bufferM must be integer 30..1000');

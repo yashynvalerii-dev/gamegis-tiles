@@ -9,15 +9,15 @@
  */
 import { assertPosition, pointInPolygon, pointOnSurface } from './geometry.js';
 import { classifyWayTags, isEntranceTags, isPowerPointTags, requiresRelationSupport, poiKindFor, POI_KINDS,
-  isPoiExclusionAreaTags } from './classifier.js';
+  isPoiExclusionAreaTags, isMajorRoadTags, isMajorWaterwayTags } from './classifier.js';
 
 export const DATASET_ID = 'OSM_MVP_BASE_V1'; // layer set is identified by NORMALIZATION_VERSION (V3 adds POWER)
-export const NORMALIZATION_VERSION = 'OSM_NORMALIZER_V6'; // V2: multipolygons; V3: power + tag allowlist; V4: site perimeters, linear military, building-on-road fix; V5: relation members of multipolygons skipped; V6: POI layer
+export const NORMALIZATION_VERSION = 'OSM_NORMALIZER_V7'; // V2: multipolygons; V3: power + tag allowlist; V4: site perimeters, linear military, building-on-road fix; V5: relation members of multipolygons skipped; V6: POI layer; V7: majorRoads + waterways lines
 export const PROCESSED_LAYERS = Object.freeze([
   'WALKABLE', 'BUILDINGS', 'ENTRANCES', 'WATER', 'RAILWAYS', 'POWER',
 ]);
 /** Layers that never make a tile INCOMPLETE: a missing POI is a missing extra, not a safety gap. */
-export const SUPPLEMENTARY_LAYERS = Object.freeze(['POIS']);
+export const SUPPLEMENTARY_LAYERS = Object.freeze(['POIS', 'MAJOR_ROADS', 'WATERWAYS']);
 export const POI_LAYER_VERSION = 1;
 export const MAX_POIS_PER_TILE = 200;
 
@@ -49,6 +49,8 @@ const LAYER_FOR_CLASS = Object.freeze({
   restricted_area: 'restrictedAreas',
   restricted_way: 'restrictedWays',
   poi: 'pois',
+  major_road: 'majorRoads',
+  waterway: 'waterways',
 });
 const POLYGON_CLASSES = new Set(['building', 'water', 'restricted_area']);
 
@@ -273,7 +275,7 @@ export function normalizeOsmMvpBase(payload, { provider } = {}) {
 
   const layers = {
     walkableWays: [], buildings: [], entrances: [], water: [], railways: [], power: [],
-    restrictedAreas: [], restrictedWays: [], pois: [],
+    restrictedAreas: [], restrictedWays: [], pois: [], majorRoads: [], waterways: [],
   };
   const features = [];
   const makeFeature = (sourceType, sourceId, featureClass, geometry, tags) => {
@@ -371,6 +373,14 @@ export function normalizeOsmMvpBase(payload, { provider } = {}) {
   }
 
   const poiStats = normalizePois({ nodeElements, nodes, ways, relations, wayById, layers, makeFeature, warnings });
+  // Supplementary lines: busy roads (keep game targets away) and big waterways (obstacles). Warnings only.
+  for (const way of ways) {
+    const cls = isMajorRoadTags(way.tags) ? 'major_road' : isMajorWaterwayTags(way.tags) ? 'waterway' : null;
+    if (!cls) continue;
+    const geo = wayCoordinates(way, nodes);
+    if (geo.error) { warnings.push({ code: 'SUPPLEMENTARY_LINE_GEOMETRY_UNAVAILABLE', sourceType: 'way', sourceId: way.id }); continue; }
+    makeFeature('way', way.id, cls, { type: 'LineString', coordinates: geo.coordinates.map((p) => [...p]) }, way.tags);
+  }
 
   return {
     datasetId: DATASET_ID,
@@ -385,7 +395,7 @@ export function normalizeOsmMvpBase(payload, { provider } = {}) {
       normalizedWayCount, ignoredWayCount, brokenRelevantWayCount,
       unsupportedRelevantRelationCount, assembledMultipolygonCount,
       featureCount: features.length,
-      ...poiStats,
+      ...poiStats, majorRoadCount: layers.majorRoads.length, waterwayCount: layers.waterways.length,
     },
     diagnostics: {
       complete: errors.length === 0,

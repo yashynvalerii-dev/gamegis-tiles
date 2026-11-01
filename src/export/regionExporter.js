@@ -29,8 +29,8 @@ export const MANIFEST_FORMAT = 'GAMEGIS_TILE_MANIFEST_V2'; // V2: gzip-stored bu
 export const BUNDLE_PATH_TEMPLATE = 'bundles/{z}/{x}/{y}.json.gz';
 export const TILE_ZOOM = 15;
 const GROUPS = {walkable: 'walkableWays', building: 'buildings', entrance: 'entrances', water: 'water',
-  railway: 'railways', power: 'power', restricted_area: 'restrictedAreas', restricted_way: 'restrictedWays', poi: 'pois'};
-const emptyGroups = () => ({walkableWays: [], buildings: [], entrances: [], water: [], railways: [], power: [], restrictedAreas: [], restrictedWays: [], pois: []});
+  railway: 'railways', power: 'power', restricted_area: 'restrictedAreas', restricted_way: 'restrictedWays', poi: 'pois', major_road: 'majorRoads', waterway: 'waterways'};
+const emptyGroups = () => ({walkableWays: [], buildings: [], entrances: [], water: [], railways: [], power: [], restrictedAreas: [], restrictedWays: [], pois: [], majorRoads: [], waterways: []});
 
 const isRelevantWay = tags => classifyWayTags(tags).length > 0 || isPoiRelatedTags(tags);
 const isRelevantRelation = tags => requiresRelationSupport(tags) || classifyWayTags(tags).length > 0 || isPoiRelatedTags(tags);

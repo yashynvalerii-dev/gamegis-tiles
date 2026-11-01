@@ -107,9 +107,16 @@ export function isPointFeatureTags(tags = {}) {
   return isEntranceTags(tags) || isPowerPointTags(tags) || isPoiTags(tags);
 }
 
-/** Ways / relations to keep when reading an extract: base classes, POIs and POI exclusion areas. */
+/** Supplementary lines (owner 2026-11-01, gameplay safety/reachability): busy roads and big waterways. */
+const MAJOR_ROADS = new Set(['motorway', 'trunk', 'primary', 'secondary', 'tertiary',
+  'motorway_link', 'trunk_link', 'primary_link', 'secondary_link', 'tertiary_link']);
+const MAJOR_WATERWAYS = new Set(['river', 'canal']);
+export const isMajorRoadTags = (tags = {}) => MAJOR_ROADS.has(value(tags, 'highway'));
+export const isMajorWaterwayTags = (tags = {}) => MAJOR_WATERWAYS.has(value(tags, 'waterway'));
+
+/** Ways / relations to keep when reading an extract beyond the base classes: POIs, their exclusion areas, extra lines. */
 export function isPoiRelatedTags(tags = {}) {
-  return isPoiTags(tags) || isPoiExclusionAreaTags(tags);
+  return isPoiTags(tags) || isPoiExclusionAreaTags(tags) || isMajorRoadTags(tags) || isMajorWaterwayTags(tags);
 }
 
 /** OSM way roles, no game placement decisions or implicit distance buffers. */

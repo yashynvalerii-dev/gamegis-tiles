@@ -17,10 +17,12 @@
  *   if (area.status === 'READY') use(area.data.walkableWays, area.data.buildings, ...);
  *   // area.data.pois (client >= 1.3, sites with manifest.poiLayer): points of interest, properties {class: 'poi',
  *   // poiKind, name?, tags, sourceType, sourceId}; older sites simply return an empty list.
+ *   // area.data.majorRoads / area.data.waterways (client >= 1.4): busy roads and rivers/canals as lines, for the
+ *   // game's own safety and reachability rules (they never change READY).
  *
  * Map data © OpenStreetMap contributors (ODbL). Applications must show this attribution.
  */
-export const CLIENT_VERSION = '1.3.0'; // 1.1: request endpoint v1, precise layers, manifest mirrors; 1.2: shared nodes, groups, tileStatusAt, splitBbox; 1.3: POI group
+export const CLIENT_VERSION = '1.4.0'; // 1.1: request endpoint v1, precise layers, manifest mirrors; 1.2: shared nodes, groups, tileStatusAt, splitBbox; 1.3: POI group; 1.4: majorRoads, waterways
 /**
  * poiKind vocabulary of POI layer v1 (manifest.poiLayer.version). Stable: values are only ever ADDED, never renamed or
  * removed — skip a kind you do not know instead of failing.
@@ -33,7 +35,7 @@ export const SUPPORTED_MANIFESTS = ['GAMEGIS_TILE_MANIFEST_V2'];
 export const ATTRIBUTION = '© OpenStreetMap contributors (ODbL)';
 /** Activity reports are accepted this far outside a requested area so the area can follow the players. */
 export const ACTIVITY_REACH_KM = 8;
-const GROUP_NAMES = ['walkableWays', 'buildings', 'entrances', 'water', 'railways', 'power', 'restrictedAreas', 'restrictedWays', 'pois'];
+const GROUP_NAMES = ['walkableWays', 'buildings', 'entrances', 'water', 'railways', 'power', 'restrictedAreas', 'restrictedWays', 'pois', 'majorRoads', 'waterways'];
 
 /** Web Mercator tile of a position. */
 export function tileFor(lat, lon, z) {
