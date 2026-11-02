@@ -31,13 +31,15 @@ jobs:
           REQUESTS_APPS: ${{ secrets.REQUESTS_APPS }}
           TILES_SITE_URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/
         run: node tools/processRequests.js --config regions.json --out requested-regions.json
-      - name: Commit new regions
-        if: steps.plan.outputs.changed == 'true'
+      - name: Commit new regions / pinned usage (observation only, never rebuilds by itself)
+        if: steps.plan.outputs.changed == 'true' || steps.plan.outputs.usage_changed == 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add requested-regions.json
-          git commit -qm "regions: add requested regions"
+          [ -f pinned-usage.json ] && git add pinned-usage.json
+          git diff --cached --quiet && exit 0
+          git commit -qm "regions: requested regions / pinned usage"
           git push
   build:
     needs: plan

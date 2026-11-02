@@ -259,6 +259,7 @@ export function planDemand(requests, pinned, requested, index, {maxNewPerRun = 2
   const o = {...DEMAND_DEFAULTS, ...tuning};
   const {windowDays, activityDays, minRadiusKm, marginKm, reachKm} = o;
   const changes = {added: [], resized: [], evicted: [], skipped: {}};
+  const pinnedRequests = [];   // signals inside pinned regions: not built, only observed (pinned usage)
   // How full is the storage right now (last build)? Unknown sizes use a generous density estimate.
   const known = r => sizesMB[r.id] ?? 0.02 * r.publish.circle.radiusKm ** 2;
   const usedMB = pinnedMB + requested.reduce((a, r) => a + known(r), 0);
@@ -285,7 +286,7 @@ export function planDemand(requests, pinned, requested, index, {maxNewPerRun = 2
     if (day < since) { skip('OUTSIDE_WINDOW'); continue; }
     const near = nearest(req);
     if (near) { addPoint(near, req, day); continue; }
-    if (inPinned(req)) { skip('PINNED_REGION'); continue; }
+    if (inPinned(req)) { skip('PINNED_REGION'); pinnedRequests.push(req); continue; }
     if (changes.added.length >= maxNewPerRun) { skip('RUN_LIMIT'); continue; }
     if (pinned.length + regions.length >= maxTotalRegions) { skip('TOTAL_LIMIT'); continue; }
     const circle = {lat: req.lat, lon: req.lon, radiusKm: minRadiusKm};
@@ -349,7 +350,19 @@ export function planDemand(requests, pinned, requested, index, {maxNewPerRun = 2
     const {_points, _new, _prev, _lastDay, _expireDays, level, ...pub} = r;
     return {...pub, lastActiveWeek: isoWeek(new Date(lastActive(r)))};
   });
-  return {regions: out, changes};
+  return {regions: out, changes, pinnedRequests};
+}
+
+/**
+ * Pinned usage (owner 2026-11-02, step 1 of demand-only coverage): where people actually play INSIDE pinned regions.
+ * The same planner rules build "shadow" areas from those signals — what a pinned region would shrink to. Nothing is
+ * built or removed from them; they are published only as coarse circles with a rating (same privacy as requested areas).
+ */
+export function planPinnedUsage(pinnedRequests, previous, index, {now = new Date(), ...tuning} = {}) {
+  const plan = planDemand(pinnedRequests, [], previous, index, {...tuning, now, maxNewPerRun: 50, maxTotalRegions: 200,
+    budgetMB: Infinity, pinnedMB: 0, sizesMB: {}});
+  return {usage: plan.regions.map(({extract, ...r}) => r), changes: {added: plan.changes.added, resized: plan.changes.resized,
+    evicted: plan.changes.evicted}};
 }
 
 // ---------------------------------------------------------------------------------------------

@@ -10,7 +10,7 @@
 import {readFileSync, writeFileSync, existsSync, appendFileSync} from 'node:fs';
 import {resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {readRequests, planDemand, planPrecise} from '../src/requests/regionRequests.js';
+import {readRequests, planDemand, planPrecise, planPinnedUsage} from '../src/requests/regionRequests.js';
 import {tileFor} from '../src/client/gamegis-client.js';
 
 const pick = (o, keys) => Object.fromEntries(keys.filter(k => Number.isFinite(o[k])).map(k => [k, o[k]]));
@@ -20,7 +20,7 @@ const UA = {'user-agent': 'GameGIS-Broker/0.1 region-requests'};
  * The responses CSV link is private (it reveals coarse player locations and times): it comes from the
  * REQUESTS_CSV_URL secret of the tiles repository, never from the public regions.json.
  */
-export async function processRequests({configPath = 'regions.json', outPath = 'requested-regions.json', fetchImpl = fetch,
+export async function processRequests({configPath = 'regions.json', outPath = 'requested-regions.json', usagePath = 'pinned-usage.json', fetchImpl = fetch,
   now = new Date(), csvUrl = process.env.REQUESTS_CSV_URL, siteUrl = process.env.TILES_SITE_URL,
   apps = (process.env.REQUESTS_APPS ?? '').split(',').map(x => x.trim()).filter(Boolean)} = {}) {
   const config = JSON.parse(readFileSync(configPath, 'utf8'));
@@ -28,6 +28,7 @@ export async function processRequests({configPath = 'regions.json', outPath = 'r
   if (!csvUrl) return {configured: false, changed: false, note: 'REQUESTS_CSV_URL secret is not set'};
   const requested = existsSync(outPath) ? JSON.parse(readFileSync(outPath, 'utf8')) : {regions: []};
   requested.precise ??= [];
+  const previousUsage = existsSync(usagePath) ? JSON.parse(readFileSync(usagePath, 'utf8')).areas ?? [] : [];
 
   const get = async (url, kind) => {
     const res = await fetchImpl(url, {headers: UA, cache: 'no-store'});
@@ -48,18 +49,26 @@ export async function processRequests({configPath = 'regions.json', outPath = 'r
   const pinnedMB = config.regions.reduce((a, r) => a + (sizesMB[r.id] ?? 0), 0);
 
   const index = await (await get('https://download.geofabrik.de/index-v1.json', 'Geofabrik index')).json();
-  const {regions, changes} = planDemand(requests, config.regions, requested.regions, index, {
+  const {regions, changes, pinnedRequests} = planDemand(requests, config.regions, requested.regions, index, {
     maxNewPerRun: s.maxNewPerRun ?? 2, maxTotalRegions: s.maxTotalRegions ?? 15, budgetMB: s.budgetMB ?? 700,
     sizesMB, pinnedMB, isPublished, now, ...pick(s, ['windowDays', 'activityDays', 'minRadiusKm', 'maxRadiusKm', 'marginKm', 'reachKm'])});
   // Base areas first; precise copies get only the space left (they are evicted first).
   const est = r => sizesMB[r.id] ?? 0.02 * r.publish.circle.radiusKm ** 2;
   const baseMB = pinnedMB + regions.reduce((a, r) => a + est(r), 0);
   const {precise, changes: preciseChanges} = planPrecise(requests, requested.precise, index, {baseMB, budgetMB: s.budgetMB ?? 700, sizesMB, now});
-  const changed = JSON.stringify(regions) !== JSON.stringify(requested.regions) || JSON.stringify(precise) !== JSON.stringify(requested.precise);
+  const {usage: pinnedUsage, changes: usageChanges} = planPinnedUsage(pinnedRequests, previousUsage, index, {now,
+    ...pick(s, ['windowDays', 'activityDays', 'minRadiusKm', 'maxRadiusKm', 'marginKm', 'reachKm'])});
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  const changed = !same(regions, requested.regions) || !same(precise, requested.precise);
+  const usageChanged = !same(pinnedUsage, previousUsage);
   if (changed) writeFileSync(outPath, JSON.stringify({regions, precise, updatedAt: now.toISOString()}, null, 2) + '\n');
+  // Observation only: a separate file that no build reads (it never triggers or changes a tiles build).
+  if (usageChanged) writeFileSync(usagePath, JSON.stringify({note: 'Where people play inside pinned regions (coarse areas, ISO weeks). Observation only.',
+    areas: pinnedUsage, updatedAt: now.toISOString()}, null, 2) + '\n');
   return {configured: true, changed, requests: requests.length, rejected, ...changes,
     regions: regions.map(r => ({id: r.id, radiusKm: r.publish.circle.radiusKm, rating: r.rating, extract: r.extract})),
-    precise: precise.map(r => ({id: r.id, radiusKm: r.publish.circle.radiusKm, precision: r.precision})), preciseChanges};
+    precise: precise.map(r => ({id: r.id, radiusKm: r.publish.circle.radiusKm, precision: r.precision})), preciseChanges,
+    pinnedUsage: pinnedUsage.map(r => ({id: r.id, radiusKm: r.publish.circle.radiusKm, rating: r.rating})), usageChanged, usageChanges};
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
@@ -67,7 +76,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   processRequests({configPath: opt('--config') ?? 'regions.json', outPath: opt('--out') ?? 'requested-regions.json'}).then(r => {
     console.log(JSON.stringify(r, null, 2));
     console.log(`::notice::requests ${r.requests ?? 0}, rejected ${r.rejected ?? 0}, added ${(r.added ?? []).length}, resized ${(r.resized ?? []).length}, changed ${r.changed}${r.configured === false ? ' (not configured)' : ''}`);
-    if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `changed=${r.changed}\n`);
+    if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `changed=${r.changed}\nusage_changed=${Boolean(r.usageChanged)}\n`);
   }, e => {
     // GitHub shows "::error::" lines as annotations, readable without the full log; never print the CSV URL.
     const msg = String(e?.message ?? e).replace(/https?:\/\/\S+/g, '<url>');

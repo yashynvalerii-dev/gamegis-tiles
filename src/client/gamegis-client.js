@@ -22,7 +22,7 @@
  *
  * Map data © OpenStreetMap contributors (ODbL). Applications must show this attribution.
  */
-export const CLIENT_VERSION = '1.4.0'; // 1.1: request endpoint v1, precise layers, manifest mirrors; 1.2: shared nodes, groups, tileStatusAt, splitBbox; 1.3: POI group; 1.4: majorRoads, waterways
+export const CLIENT_VERSION = '1.5.0'; // 1.1: request endpoint v1, precise layers, manifest mirrors; 1.2: shared nodes, groups, tileStatusAt, splitBbox; 1.3: POI group; 1.4: majorRoads, waterways; 1.5: activity everywhere the site has data
 /**
  * poiKind vocabulary of POI layer v1 (manifest.poiLayer.version). Stable: values are only ever ADDED, never renamed or
  * removed — skip a kind you do not know instead of failing.
@@ -353,22 +353,25 @@ export function createTileClient({mirrors, fetchImpl = globalThis.fetch, timeout
   }
 
   /**
-   * "People play here": confirms an area prepared on request and lets it follow the players. Play inside the
-   * area only confirms it; play near its edge (up to ACTIVITY_REACH_KM outside) on several days makes it grow
-   * that way. Sends at most one signal
-   * per area per 24 h (remembered in localStorage when available), only inside areas that were built on
-   * request (manifest regions with kind "requested") or near them. Call it when a game session starts.
-   * Returns {sent: true} or {sent: false, reason: NOT_IN_REQUESTED_AREA | ALREADY_TODAY | REQUESTS_NOT_CONFIGURED | NETWORK_ERROR}.
+   * "People play here": keeps prepared map data where it is used. Play inside an area built on request confirms it;
+   * play near its edge (up to ACTIVITY_REACH_KM outside) on several days makes it grow that way. Since 1.5 it is
+   * also sent inside permanent ("pinned") regions, where the broker learns which parts are really used (areas
+   * nobody plays in may later be dropped). Sends at most one signal per ~5 km spot per 24 h (remembered in
+   * localStorage when available), only where the site has data or a requested area is near — elsewhere call
+   * requestRegion. Call it when a game session starts.
+   * Returns {sent: true} or {sent: false, reason: NOT_IN_PREPARED_AREA | ALREADY_TODAY | REQUESTS_NOT_CONFIGURED | NETWORK_ERROR}.
    */
   async function reportActivity({lat, lon, app, nowMs = Date.now()}) {
     checkApp(app);
     const m = await getManifest();
     const region = (m.regions ?? []).find(r => r.kind === 'requested' && r.circle &&
       Math.hypot((lat - r.circle.lat) * 111.32, (lon - r.circle.lon) * 111.32 * Math.cos(lat * Math.PI / 180)) <= r.circle.radiusKm + ACTIVITY_REACH_KM);
-    if (!region) return {sent: false, reason: 'NOT_IN_REQUESTED_AREA'};
+    const t = tileFor(lat, lon, m.bundleZoom ?? 13);
+    const published = Boolean(m.bundles?.[`${m.bundleZoom ?? 13}/${t.x}/${t.y}`]);
+    if (!region && !published) return {sent: false, reason: 'NOT_IN_PREPARED_AREA'};
     if (!endpointReady(m)) return {sent: false, reason: 'REQUESTS_NOT_CONFIGURED'};
     // one signal per day per coarse spot (~5 km): play at home and at the edge on one day are both heard
-    const key = `gamegis-activity:${region.id}:${Math.round(lat * 20) / 20}/${Math.round(lon * 20) / 20}`;
+    const key = `gamegis-activity:${region?.id ?? 'site'}:${Math.round(lat * 20) / 20}/${Math.round(lon * 20) / 20}`;
     let last = activity.get(key);
     try { last ??= Number(globalThis.localStorage?.getItem(key)) || undefined; } catch {}
     if (last && nowMs - last < 86400000) return {sent: false, reason: 'ALREADY_TODAY'};
@@ -377,8 +380,8 @@ export function createTileClient({mirrors, fetchImpl = globalThis.fetch, timeout
     if (!c.ok) return {sent: false, reason: c.status};
     activity.set(key, nowMs);
     try { globalThis.localStorage?.setItem(key, String(nowMs)); } catch {}
-    log.push({event: 'activity', region: region.id, app});
-    return {sent: true, region: region.id};
+    log.push({event: 'activity', region: region?.id ?? null, app});
+    return {sent: true, region: region?.id ?? null};
   }
   const activity = new Map();
 
