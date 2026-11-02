@@ -36,8 +36,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add requested-regions.json
-          [ -f pinned-usage.json ] && git add pinned-usage.json
+          for f in requested-regions.json pinned-usage.json; do if [ -f "$f" ]; then git add "$f"; fi; done
           git diff --cached --quiet && exit 0
           git commit -qm "regions: requested regions / pinned usage"
           git push
