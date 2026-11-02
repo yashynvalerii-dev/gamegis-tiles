@@ -1,0 +1,20 @@
+{
+  "note": "Where people play inside pinned regions (coarse areas, ISO weeks). Observation only.",
+  "areas": [
+    {
+      "id": "req-51p00_11p00",
+      "name": "Thüringen 51.00,11.00",
+      "publish": {
+        "circle": {
+          "lat": 51,
+          "lon": 11,
+          "radiusKm": 3
+        }
+      },
+      "addedOn": "2026-11-02",
+      "rating": 2,
+      "lastActiveWeek": "2026-W44"
+    }
+  ],
+  "updatedAt": "2026-11-02T07:48:58.908Z"
+}
