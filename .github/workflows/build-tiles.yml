@@ -28,7 +28,7 @@ jobs:
       HAS_CLOUDFLARE: ${{ secrets.CLOUDFLARE_API_TOKEN != '' }}
       TILES_SITE_URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/
     runs-on: ubuntu-24.04   # pinned: ubuntu-latest moves to 26.04 from 2026-10-19; upgrade after a test run
-    timeout-minutes: 150
+    timeout-minutes: 330   # Geofabrik sometimes throttles to <1 MB/s (2026-11-01: 4.6 GB in ~2 h); GitHub max is 360
     steps:
       - uses: actions/checkout@v5
         with:
