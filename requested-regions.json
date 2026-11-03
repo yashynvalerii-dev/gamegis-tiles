@@ -1,0 +1,21 @@
+{
+  "regions": [
+    {
+      "id": "req-50p95_7p00",
+      "name": "Regierungsbezirk Köln 50.95,7.00",
+      "extract": "europe/germany/nordrhein-westfalen/koeln-regbez",
+      "publish": {
+        "circle": {
+          "lat": 50.95,
+          "lon": 7,
+          "radiusKm": 3
+        }
+      },
+      "addedOn": "2026-11-03",
+      "rating": 1,
+      "lastActiveWeek": "2026-W45"
+    }
+  ],
+  "precise": [],
+  "updatedAt": "2026-11-03T02:09:33.873Z"
+}
