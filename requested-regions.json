@@ -6,9 +6,9 @@
       "extract": "europe/germany/nordrhein-westfalen/koeln-regbez",
       "publish": {
         "circle": {
-          "lat": 50.95,
-          "lon": 7,
-          "radiusKm": 3
+          "lat": 50.925,
+          "lon": 7.05,
+          "radiusKm": 7.5
         }
       },
       "addedOn": "2026-11-03",
@@ -17,5 +17,5 @@
     }
   ],
   "precise": [],
-  "updatedAt": "2026-11-03T02:09:33.873Z"
+  "updatedAt": "2026-11-03T04:24:23.382Z"
 }
