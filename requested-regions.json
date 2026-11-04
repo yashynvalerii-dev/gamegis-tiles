@@ -1,6 +1,21 @@
 {
   "regions": [
     {
+      "id": "req-28p15_m15p45",
+      "name": "Canary Islands 28.15,-15.45",
+      "extract": "africa/canary-islands",
+      "publish": {
+        "circle": {
+          "lat": 28.15,
+          "lon": -15.45,
+          "radiusKm": 3
+        }
+      },
+      "addedOn": "2026-11-03",
+      "rating": 2,
+      "lastActiveWeek": "2026-W45"
+    },
+    {
       "id": "req-50p95_7p00",
       "name": "Regierungsbezirk Köln 50.95,7.00",
       "extract": "europe/germany/nordrhein-westfalen/koeln-regbez",
@@ -14,23 +29,8 @@
       "addedOn": "2026-11-03",
       "rating": 1,
       "lastActiveWeek": "2026-W45"
-    },
-    {
-      "id": "req-28p15_m15p45",
-      "name": "Canary Islands 28.15,-15.45",
-      "extract": "africa/canary-islands",
-      "publish": {
-        "circle": {
-          "lat": 28.15,
-          "lon": -15.45,
-          "radiusKm": 3
-        }
-      },
-      "addedOn": "2026-11-03",
-      "rating": 1,
-      "lastActiveWeek": "2026-W45"
     }
   ],
   "precise": [],
-  "updatedAt": "2026-11-03T14:25:06.936Z"
+  "updatedAt": "2026-11-04T04:14:36.913Z"
 }
