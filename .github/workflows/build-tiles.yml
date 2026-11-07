@@ -85,7 +85,7 @@ jobs:
             if [ "${{ steps.plan.outputs.rebuild }}" = "0" ]; then echo "nothing to rebuild" | tee diag/download.log; exit 0; fi
             CFG="--config rebuild.json"
           else
-            CFG="--config regions.json --config requested-regions.json"
+            CFG="--prune --config regions.json --config requested-regions.json"   # full build: drop unused cached extracts
           fi
           npm run download-extract -- $CFG 2>&1 | tee diag/download.log
           if grep -q '^Downloading' diag/download.log; then echo "downloaded=true" >> "$GITHUB_OUTPUT"; fi

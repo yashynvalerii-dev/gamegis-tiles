@@ -25,7 +25,7 @@
     {
       "id": "thueringen",
       "name": "Thuringia",
-      "extract": "europe/germany",
+      "extract": "europe/germany/thueringen",
       "publish": {
         "poly": "europe/germany/thueringen"
       }

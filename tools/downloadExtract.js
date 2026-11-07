@@ -7,7 +7,7 @@
  *   npm.cmd run download-extract -- --region europe/ukraine    one extract + its .poly
  *   npm.cmd run download-extract -- --config regions.json      every extract and publish boundary in the config
  */
-import {createWriteStream, mkdirSync, renameSync, rmSync, statSync, createReadStream, writeFileSync, readFileSync, existsSync} from 'node:fs';
+import {readdirSync, createWriteStream, mkdirSync, renameSync, rmSync, statSync, createReadStream, writeFileSync, readFileSync, existsSync} from 'node:fs';
 import {createHash} from 'node:crypto';
 import {join, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -126,8 +126,10 @@ async function downloadPoly(region) {
 
 export function plan(args) {
   const extracts = new Set(), polys = new Set();
+  let prune = false;
   for (let i = 0; i < args.length; i++) {
-    if (args[i] === '--region') { extracts.add(args[++i]); polys.add(args[i]); }
+    if (args[i] === '--prune') prune = true;
+    else if (args[i] === '--region') { extracts.add(args[++i]); polys.add(args[i]); }
     else if (args[i] === '--config') {
       const path = resolve(args[++i]);
       if (!existsSync(path)) continue;   // optional configs (requested-regions.json) may not exist yet
@@ -140,13 +142,21 @@ export function plan(args) {
   }
   if (!extracts.size) { extracts.add('europe/germany/thueringen'); polys.add('europe/germany/thueringen'); }
   for (const r of [...extracts, ...polys]) if (!valid(r)) throw new Error(`Invalid region path: ${r}`);
-  return {extracts: [...extracts], polys: [...polys]};
+  return {extracts: [...extracts], polys: [...polys], prune};
+}
+
+/** Extract files in dir that no configured region uses (e.g. Germany after Thuringia got its own extract). */
+export function staleExtracts(files, extracts) {
+  const keep = new Set(extracts.map(r => `${lastPart(r)}-latest.osm.pbf`));
+  return files.filter(f => /\.osm\.pbf(\.part)?$/.test(f) && !keep.has(f));
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
-    const {extracts, polys} = plan(process.argv.slice(2));
+    const {extracts, polys, prune} = plan(process.argv.slice(2));
     mkdirSync(dir, {recursive: true});
+    // --prune (full builds): drop extracts no region uses, so the build cache does not carry them.
+    if (prune) for (const f of staleExtracts(readdirSync(dir), extracts)) { rmSync(join(dir, f), {force: true}); console.log(`Removed unused extract ${f}`); }
     for (const r of extracts) await withRetry(() => downloadExtract(r), {label: r});
     for (const p of polys) await withRetry(() => downloadPoly(p), {label: `${p}.poly`});
   } catch (e) { console.error('FAILED:', e.message); process.exitCode = 1; }
