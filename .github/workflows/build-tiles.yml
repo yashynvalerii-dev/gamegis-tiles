@@ -1,5 +1,5 @@
 # Builds static tile bundles from the latest Geofabrik extract and publishes them on GitHub Pages.
-# Runs weekly, on demand, and when the pipeline code changes.
+# Runs weekly (full), on demand, after game requests (incremental) and when the pipeline changes (full only if map-making code changed).
 # A build check compares each build with the published site; a broken build is not published (GitHub e-mails the owner).
 name: build-tiles
 on:
@@ -42,6 +42,7 @@ jobs:
       - uses: actions/checkout@v5
         with:
           ref: main   # when called after a requests commit, build the newest main
+          fetch-depth: 0   # small repo; the full history lets a push build see which files changed
       - uses: actions/setup-node@v5
         with:
           node-version: '24'
@@ -51,9 +52,26 @@ jobs:
           path: data/extracts
           key: extracts-${{ github.run_id }}
           restore-keys: extracts-
+      # Full build: weekly schedule, manual run without "incremental", and pushes that change map-making code.
+      # A push that changes only requests, the game loader, checks or the site page is published incrementally:
+      # unchanged regions are copied from the site, so Geofabrik is not asked again (owner 2026-11-07).
+      - id: mode
+        name: Decide full or incremental build
+        run: |
+          INCR="${{ inputs.incremental && 'true' || 'false' }}"
+          if [ "${{ github.event_name }}" = "push" ]; then
+            BEFORE="${{ github.event.before }}"
+            if [ -n "$BEFORE" ] && [ "$BEFORE" != "0000000000000000000000000000000000000000" ] && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+              CHANGED=$(git diff --name-only "$BEFORE" "${{ github.sha }}")
+              echo "changed files:"; echo "$CHANGED"
+              MAP=$(echo "$CHANGED" | grep -E '^(src/(gis|providers|export|storage|core)/|tools/(exportTiles|downloadExtract)\.js$|package\.json$)' || true)
+              if [ -z "$MAP" ]; then INCR=true; echo "no map-making code changed -> incremental"; else echo "map-making code changed -> full:"; echo "$MAP"; fi
+            else echo "unknown previous commit -> full"; fi
+          fi
+          echo "incremental=$INCR" | tee -a "$GITHUB_OUTPUT"
       - id: plan
         name: Plan (incremental builds reuse unchanged regions from the published site)
-        if: inputs.incremental
+        if: steps.mode.outputs.incremental == 'true'
         run: |
           set -o pipefail
           mkdir -p diag
@@ -63,7 +81,7 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p diag
-          if [ "${{ inputs.incremental }}" = "true" ]; then
+          if [ "${{ steps.mode.outputs.incremental }}" = "true" ]; then
             if [ "${{ steps.plan.outputs.rebuild }}" = "0" ]; then echo "nothing to rebuild" | tee diag/download.log; exit 0; fi
             CFG="--config rebuild.json"
           else
@@ -74,7 +92,7 @@ jobs:
       - name: Export tile bundles (all regions, or only changed ones in incremental builds)
         run: |
           set -o pipefail
-          INCR=""; if [ "${{ inputs.incremental }}" = "true" ]; then INCR="--incremental $TILES_SITE_URL"; fi
+          INCR=""; if [ "${{ steps.mode.outputs.incremental }}" = "true" ]; then INCR="--incremental $TILES_SITE_URL"; fi
           npm run export-tiles -- --config regions.json --config requested-regions.json --out site $INCR 2>&1 | tee diag/export.log
       - uses: actions/cache/save@v4
         if: steps.download.outputs.downloaded == 'true'
