@@ -44,3 +44,4 @@ jobs:
     needs: plan
     if: needs.plan.outputs.changed == 'true'
     uses: ./.github/workflows/build-tiles.yml
+    secrets: inherit   # the Cloudflare mirror token; without it request-driven builds left the mirror stale (2026-11-07)
