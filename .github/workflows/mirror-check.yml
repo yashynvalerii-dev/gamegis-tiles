@@ -1,10 +1,31 @@
-# Manual: shows the Cloudflare Pages projects and their addresses (token from secrets; nothing secret is printed).
+# Daily: the Cloudflare mirror must serve the same build as GitHub Pages (games may read the mirror first).
+# A stale mirror fails this run, so GitHub e-mails the owner. Manual run also lists the Cloudflare Pages projects.
 name: mirror-check
-on: workflow_dispatch
+on:
+  schedule:
+    - cron: '41 6 * * *'
+  workflow_dispatch:
 permissions:
   contents: read
 jobs:
+  freshness:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+      - name: Both copies serve the same build
+        run: |
+          node --input-type=module -e '
+            const sites = ["https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/", "https://gamegis-tiles.pages.dev/"];
+            const m = await Promise.all(sites.map(async s => { const r = await fetch(s + "manifest.json?t=" + Date.now(), {cache: "no-store"}); if (!r.ok) throw new Error(s + " HTTP " + r.status); return r.json(); }));
+            const [a, b] = m.map(x => ({at: x.generatedAt, bundles: Object.keys(x.bundles ?? {}).length, regions: (x.regions ?? []).map(r => r.id).join(",")}));
+            console.log("::notice::pages " + JSON.stringify(a) + " | mirror " + JSON.stringify(b));
+            if (a.at !== b.at) { console.log("::error::Cloudflare mirror is stale: " + b.at + " vs " + a.at + " (run build-tiles manually)"); process.exit(1); }
+          '
   check:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
