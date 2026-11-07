@@ -31,6 +31,21 @@
       "lastActiveWeek": "2026-W45"
     },
     {
+      "id": "req-28p15_m15p60",
+      "name": "Canary Islands 28.15,-15.60",
+      "extract": "africa/canary-islands",
+      "publish": {
+        "circle": {
+          "lat": 28.15,
+          "lon": -15.6,
+          "radiusKm": 3
+        }
+      },
+      "addedOn": "2026-11-07",
+      "rating": 1,
+      "lastActiveWeek": "2026-W45"
+    },
+    {
       "id": "req-50p95_7p00",
       "name": "Regierungsbezirk Köln 50.95,7.00",
       "extract": "europe/germany/nordrhein-westfalen/koeln-regbez",
@@ -47,5 +62,5 @@
     }
   ],
   "precise": [],
-  "updatedAt": "2026-11-07T16:24:17.927Z"
+  "updatedAt": "2026-11-07T17:35:43.274Z"
 }
