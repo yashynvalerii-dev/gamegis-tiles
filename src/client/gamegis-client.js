@@ -22,7 +22,7 @@
  *
  * Map data © OpenStreetMap contributors (ODbL). Applications must show this attribution.
  */
-export const CLIENT_VERSION = '1.5.0'; // 1.1: request endpoint v1, precise layers, manifest mirrors; 1.2: shared nodes, groups, tileStatusAt, splitBbox; 1.3: POI group; 1.4: majorRoads, waterways; 1.5: activity everywhere the site has data
+export const CLIENT_VERSION = '1.6.0'; // 1.1: request endpoint v1, precise layers, manifest mirrors; 1.2: shared nodes, groups, tileStatusAt, splitBbox; 1.3: POI group; 1.4: majorRoads, waterways; 1.5: activity everywhere the site has data; 1.6: sized requests (~1 km + needM)
 /**
  * poiKind vocabulary of POI layer v1 (manifest.poiLayer.version). Stable: values are only ever ADDED, never renamed or
  * removed — skip a kind you do not know instead of failing.
@@ -311,12 +311,14 @@ export function createTileClient({mirrors, fetchImpl = globalThis.fetch, timeout
 
   const requested = new Set();
   const trusted = [...TRUSTED_REQUEST_ENDPOINTS, ...requestEndpoints];
-  const sendSignal = async (m, lat, lon, app, kind, precision) => {
-    const cLat = Math.round(lat * 20) / 20, cLon = Math.round(lon * 20) / 20;
+  const sendSignal = async (m, lat, lon, app, kind, precision, needM = null) => {
+    // Sized requests (1.6): spot ~1 km + the radius the game needs; everything else ~5 km.
+    const step = needM ? 100 : 20;
+    const cLat = Math.round(lat * step) / step, cLon = Math.round(lon * step) / step;
     // text/plain keeps it a "simple" request (no CORS preflight); the answer is readable JSON.
     const res = await timedFetch(m.regionRequests.url, {method: 'POST', redirect: 'follow',
       headers: {'content-type': 'text/plain;charset=utf-8'},
-      body: JSON.stringify({v: 1, kind, lat: Number(cLat.toFixed(2)), lon: Number(cLon.toFixed(2)), app, ...(precision > 5 ? {precision} : {})})});
+      body: JSON.stringify({v: 1, kind, lat: Number(cLat.toFixed(2)), lon: Number(cLon.toFixed(2)), app, ...(precision > 5 ? {precision} : {}), ...(needM ? {needM} : {})})});
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const answer = await res.json();
     return {lat: cLat, lon: cLon, ok: answer?.ok === true, status: String(answer?.status ?? 'UNKNOWN')};
@@ -327,7 +329,9 @@ export function createTileClient({mirrors, fetchImpl = globalThis.fetch, timeout
 
   /**
    * Asks for map data around the player when it is missing (not prepared yet, or the player is near the
-   * edge of a prepared area). Sends only COARSE coordinates (~5 km) and the app id to the request endpoint
+   * edge of a prepared area). Since 1.6 it sends the spot rounded to ~1 km plus needM = radiusM rounded up to
+   * 100 m (100–3000): the broker prepares an area covering that radius (owner decision 2026-11-07). Nothing
+   * personal; only the app id goes with it, to the request endpoint
    * published in the manifest; nothing personal. Requests near an existing requested area raise its rating
    * (it grows); far ones create a new small area. Returns {sent: true, lat, lon} or {sent: false, reason:
    * ALREADY_AVAILABLE | ALREADY_REQUESTED | REQUESTS_NOT_CONFIGURED | NETWORK_ERROR | RATE_LIMITED | FULL | INVALID}.
@@ -342,10 +346,11 @@ export function createTileClient({mirrors, fetchImpl = globalThis.fetch, timeout
     // precise layers (6/7 decimals) are built only on request: a READY base area answers only precision 5
     if (area.status === 'READY' && area.precision >= precision) return {sent: false, reason: 'ALREADY_AVAILABLE'};
     if (!endpointReady(m)) return {sent: false, reason: 'REQUESTS_NOT_CONFIGURED'};
-    const key = `${Math.round(lat * 20) / 20}/${Math.round(lon * 20) / 20}/${precision}`;
+    const needM = Math.min(3000, Math.max(100, Math.ceil((Number(radiusM) || 1000) / 100) * 100));
+    const key = `${Math.round(lat * 100) / 100}/${Math.round(lon * 100) / 100}/${precision}/${needM}`;
     if (requested.has(key)) return {sent: false, reason: 'ALREADY_REQUESTED'};
     let c;
-    try { c = await sendSignal(m, lat, lon, app, 'request', precision); } catch { return {sent: false, reason: 'NETWORK_ERROR'}; }
+    try { c = await sendSignal(m, lat, lon, app, 'request', precision, needM); } catch { return {sent: false, reason: 'NETWORK_ERROR'}; }
     if (!c.ok) return {sent: false, reason: c.status};
     requested.add(key);
     log.push({event: 'region-request', lat: c.lat, lon: c.lon, status: c.status, app});

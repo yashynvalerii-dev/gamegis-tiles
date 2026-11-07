@@ -46,7 +46,7 @@ export function readRequests(csvText, {columns = {lat: 'lat', lon: 'lon', app: '
   const head = rows[0].map(h => h.trim().toLowerCase());
   const idx = k => head.indexOf(String(columns[k]).toLowerCase());
   const [iLat, iLon, iApp, iAt] = [idx('lat'), idx('lon'), idx('app'), head.findIndex(h => /timestamp|zeitstempel|отметка/.test(h))];
-  const iPrec = head.indexOf('precision');
+  const iPrec = head.indexOf('precision'), iKind = head.indexOf('kind'), iNeed = head.indexOf('needm');
   if (iLat < 0 || iLon < 0 || iApp < 0) throw new Error(`REQUESTS_CSV_COLUMNS_MISSING (have: ${head.join(', ')})`);
   const requests = []; let rejected = 0;
   for (const r of rows.slice(1)) {
@@ -54,10 +54,15 @@ export function readRequests(csvText, {columns = {lat: 'lat', lon: 'lon', app: '
     const app = String(r[iApp] ?? '').trim().toLowerCase();
     if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 80 || Math.abs(lon) > 180 ||
         (apps.length && !apps.includes(app))) { rejected++; continue; }
-    // Never trust client precision: keep requests coarse (~5 km) regardless of what was submitted.
+    // Never trust client precision: ~1 km only for requests that state the radius they need (owner 2026-11-07),
+    // ~5 km for everything else.
     const p = iPrec >= 0 ? Number(r[iPrec]) : 5;
-    requests.push({lat: Math.round(lat * 20) / 20, lon: Math.round(lon * 20) / 20, app, at: iAt >= 0 ? String(r[iAt]).trim() : '',
-      precision: [5, 6, 7].includes(p) ? p : 5});
+    const kind = iKind >= 0 ? String(r[iKind]).trim() : 'request';
+    const n = iNeed >= 0 ? Number(r[iNeed]) : NaN;
+    const needM = kind === 'request' && Number.isFinite(n) && n >= 100 && n <= 3000 ? Math.ceil(n / 100) * 100 : null;
+    const step = needM ? 100 : 20;
+    requests.push({lat: Math.round(lat * step) / step, lon: Math.round(lon * step) / step, app, at: iAt >= 0 ? String(r[iAt]).trim() : '',
+      precision: [5, 6, 7].includes(p) ? p : 5, kind, ...(needM ? {needM} : {})});
   }
   return {requests, rejected};
 }
@@ -240,12 +245,23 @@ export function enclosingCircle(points) {
   return {lat: lat0 + c.y / ky, lon: points[0].lon + c.x / kx, radiusKm: c.r};
 }
 
-/** Area for a set of played points: enclosing circle + margin, centre rounded (~0.5 km), radius in 0.5 km steps. */
+/** Rounding allowance for ~1 km request points (half-diagonal of a 0.01° cell). */
+export const SIZED_REQUEST_MARGIN_KM = 0.8;
+export const MIN_SIZED_RADIUS_KM = 1;
+
+/**
+ * Area for a set of played points: centre of their enclosing circle (rounded ~0.5 km), radius covering every point
+ * with its own margin, in 0.5 km steps. A point may carry marginKm (sized requests: needed radius + rounding);
+ * other points use opts.marginKm and keep the area at least minRadiusKm. Areas made only of sized requests may be
+ * smaller (MIN_SIZED_RADIUS_KM).
+ */
 export function areaFor(points, {minRadiusKm, marginKm}) {
   const c = enclosingCircle(points);
   const lat = Math.round(c.lat * 200) / 200, lon = Math.round(c.lon * 200) / 200;
-  const shift = distanceKm(c, {lat, lon});
-  const radiusKm = Math.max(minRadiusKm, Math.ceil((c.radiusKm + marginKm + shift) * 2 - 1e-9) / 2);
+  const centre = {lat, lon};
+  const reach = Math.max(...points.map(p => distanceKm(centre, p) + (p.marginKm ?? marginKm)));
+  const floor = points.some(p => p.marginKm === undefined) ? minRadiusKm : MIN_SIZED_RADIUS_KM;
+  const radiusKm = Math.max(floor, Math.ceil(reach * 2 - 1e-9) / 2);
   return {lat: Number(lat.toFixed(3)), lon: Number(lon.toFixed(3)), radiusKm};
 }
 
@@ -278,7 +294,10 @@ export function planDemand(requests, pinned, requested, index, {maxNewPerRun = 2
   const addPoint = (r, req, day) => {
     const k = `${req.lat},${req.lon}`;
     const e = r._points.get(k) ?? {lat: req.lat, lon: req.lon, days: new Set()};
-    e.days.add(day); r._points.set(k, e);
+    e.days.add(day);
+    // A sized request is an explicit need: the area must cover the needed radius around it (plus rounding).
+    if (req.needM) { e.marginKm = Math.max(e.marginKm ?? 0, req.needM / 1000 + SIZED_REQUEST_MARGIN_KM); e.request = true; }
+    r._points.set(k, e);
   };
 
   for (const req of requests) {
@@ -313,7 +332,7 @@ export function planDemand(requests, pinned, requested, index, {maxNewPerRun = 2
     // Retained spots: visited recently enough for this area's rhythm; new spots outside need a habit.
     const counted = pts.filter(p => {
       if (ageDays([...p.days].sort().at(-1)) > rules.retainDays) return false;
-      return r._new || distanceKm(p, r._prev) <= r._prev.radiusKm || p.days.size >= rules.growDays;
+      return r._new || p.request || distanceKm(p, r._prev) <= r._prev.radiusKm || p.days.size >= rules.growDays;
     });
     if (!counted.length) continue;
     counted.sort((a, b) => distanceKm(a, r._prev) - distanceKm(b, r._prev));
@@ -359,7 +378,9 @@ export function planDemand(requests, pinned, requested, index, {maxNewPerRun = 2
  * built or removed from them; they are published only as coarse circles with a rating (same privacy as requested areas).
  */
 export function planPinnedUsage(pinnedRequests, previous, index, {now = new Date(), ...tuning} = {}) {
-  const plan = planDemand(pinnedRequests, [], previous, index, {...tuning, now, maxNewPerRun: 50, maxTotalRegions: 200,
+  // Observation stays coarse (~5 km) even when requests came with ~1 km precision.
+  const coarse = pinnedRequests.map(({needM, ...r}) => ({...r, lat: Math.round(r.lat * 20) / 20, lon: Math.round(r.lon * 20) / 20}));
+  const plan = planDemand(coarse, [], previous, index, {...tuning, now, maxNewPerRun: 50, maxTotalRegions: 200,
     budgetMB: Infinity, pinnedMB: 0, sizesMB: {}});
   return {usage: plan.regions.map(({extract, ...r}) => r), changes: {added: plan.changes.added, resized: plan.changes.resized,
     evicted: plan.changes.evicted}};
