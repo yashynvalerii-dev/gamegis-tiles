@@ -11,7 +11,16 @@ on:
         description: 'Publish even if the build check blocks it (after a human looked at build-check.json)'
         type: boolean
         default: false
+      incremental:
+        description: 'Rebuild only changed regions, copy the rest from the published site'
+        type: boolean
+        default: false
   workflow_call:
+    inputs:
+      incremental:
+        description: 'Rebuild only changed regions (request-driven builds); weekly and code builds stay full'
+        type: boolean
+        default: false
   push:
     branches: [main]
     paths: ['src/**', 'tools/**', 'site-template/**', 'regions.json', 'requested-regions.json', '.github/workflows/build-tiles.yml']
@@ -36,15 +45,43 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: '24'
-      - name: Download extracts (MD5 verified) and region boundaries
+      # Extracts kept between builds; the downloader skips a file whose published MD5 matches (spares Geofabrik).
+      - uses: actions/cache/restore@v4
+        with:
+          path: data/extracts
+          key: extracts-${{ github.run_id }}
+          restore-keys: extracts-
+      - id: plan
+        name: Plan (incremental builds reuse unchanged regions from the published site)
+        if: inputs.incremental
         run: |
           set -o pipefail
           mkdir -p diag
-          npm run download-extract -- --config regions.json --config requested-regions.json 2>&1 | tee diag/download.log
-      - name: Export tile bundles for all regions
+          node tools/exportTiles.js --config regions.json --config requested-regions.json --incremental "$TILES_SITE_URL" --plan-out rebuild.json 2>&1 | tee diag/plan.log
+      - id: download
+        name: Download extracts (MD5 verified) and region boundaries
         run: |
           set -o pipefail
-          npm run export-tiles -- --config regions.json --config requested-regions.json --out site 2>&1 | tee diag/export.log
+          mkdir -p diag
+          if [ "${{ inputs.incremental }}" = "true" ]; then
+            if [ "${{ steps.plan.outputs.rebuild }}" = "0" ]; then echo "nothing to rebuild" | tee diag/download.log; exit 0; fi
+            CFG="--config rebuild.json"
+          else
+            CFG="--config regions.json --config requested-regions.json"
+          fi
+          npm run download-extract -- $CFG 2>&1 | tee diag/download.log
+          if grep -q '^Downloading' diag/download.log; then echo "downloaded=true" >> "$GITHUB_OUTPUT"; fi
+      - name: Export tile bundles (all regions, or only changed ones in incremental builds)
+        run: |
+          set -o pipefail
+          INCR=""; if [ "${{ inputs.incremental }}" = "true" ]; then INCR="--incremental $TILES_SITE_URL"; fi
+          npm run export-tiles -- --config regions.json --config requested-regions.json --out site $INCR 2>&1 | tee diag/export.log
+      - uses: actions/cache/save@v4
+        if: steps.download.outputs.downloaded == 'true'
+        continue-on-error: true
+        with:
+          path: data/extracts
+          key: extracts-${{ github.run_id }}
       - name: Check the build against the published site (blocks broken builds)
         run: |
           curl -fsS "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/export-report.json?v=${{ github.run_id }}" -o prev-report.json || echo "no previous report to compare"

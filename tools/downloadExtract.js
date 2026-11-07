@@ -81,6 +81,11 @@ async function downloadExtract(region) {
   const name = lastPart(region);
   const target = join(dir, `${name}-latest.osm.pbf`), part = target + '.part';
   const {url, expected} = await pickSource(region);
+  // Restored from the build cache with the same published MD5: nothing to download (spares Geofabrik and time).
+  if (existsSync(target) && await md5Of(target) === expected) {
+    console.log(`OK: ${target} (${(statSync(target).size / 1048576).toFixed(1)} MB, cached, MD5 verified)`);
+    return;
+  }
   console.log(`Downloading ${url}`);
   const idle = idleAbort();
   try {
