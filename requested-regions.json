@@ -16,6 +16,21 @@
       "lastActiveWeek": "2026-W46"
     },
     {
+      "id": "req-51p30_9p45",
+      "name": "Hessen 51.30,9.45",
+      "extract": "europe/germany/hessen",
+      "publish": {
+        "circle": {
+          "lat": 51.3,
+          "lon": 9.45,
+          "radiusKm": 3
+        }
+      },
+      "addedOn": "2026-11-12",
+      "rating": 1,
+      "lastActiveWeek": "2026-W46"
+    },
+    {
       "id": "req-28p10_m15p70",
       "name": "Canary Islands 28.10,-15.70",
       "extract": "africa/canary-islands",
@@ -62,5 +77,5 @@
     }
   ],
   "precise": [],
-  "updatedAt": "2026-11-09T22:36:41.485Z"
+  "updatedAt": "2026-11-12T18:03:08.039Z"
 }
