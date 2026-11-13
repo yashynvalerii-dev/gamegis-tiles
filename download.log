@@ -1,0 +1,10 @@
+
+> gamegis-tiles@1.0.0 download-extract
+> node tools/downloadExtract.js --config rebuild.json
+
+Downloading https://download.geofabrik.de/europe/germany/hessen-latest.osm.pbf
+  100 MB / 332 MB
+  200 MB / 332 MB
+  300 MB / 332 MB
+OK: /home/runner/work/gamegis-tiles/gamegis-tiles/data/extracts/hessen-latest.osm.pbf (331.8 MB, MD5 verified)
+OK: /home/runner/work/gamegis-tiles/gamegis-tiles/data/extracts/hessen.poly (boundary)
