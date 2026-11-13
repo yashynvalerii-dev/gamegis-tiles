@@ -91,7 +91,7 @@ function bboxArea(geometry) {
 }
 
 /**
- * Smallest Geofabrik extract (index-v1.json feature collection) containing the whole circle.
+ * Smallest Geofabrik extract (index-v1.json feature collection) containing the whole circle, never a continent.
  * Returns the extract path such as "europe/ukraine" or null.
  */
 export function chooseExtract(index, circle) {
@@ -102,6 +102,8 @@ export function chooseExtract(index, circle) {
     if (!pbf || !f.geometry) continue;
     const m = pbf.match(/^https:\/\/download\.geofabrik\.de\/(.+)-latest\.osm\.pbf$/);
     if (!m) continue;
+    // Never a whole continent (africa, europe, ...: many GB). 2026-11-13: a point at sea fell into "africa".
+    if (!m[1].includes('/')) continue;
     if (!pts.every(p => geometryContains(f.geometry, p.lon, p.lat))) continue;
     const area = bboxArea(f.geometry);
     if (!best || area < best.area) best = {extract: m[1], area, name: f.properties.name};
