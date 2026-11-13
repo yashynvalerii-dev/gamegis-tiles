@@ -16,6 +16,21 @@
       "lastActiveWeek": "2026-W46"
     },
     {
+      "id": "req-0p00_0p01",
+      "name": "Africa 0.00,0.01",
+      "extract": "africa",
+      "publish": {
+        "circle": {
+          "lat": 0,
+          "lon": 0.01,
+          "radiusKm": 2.5
+        }
+      },
+      "addedOn": "2026-11-13",
+      "rating": 1,
+      "lastActiveWeek": "2026-W46"
+    },
+    {
       "id": "req-51p30_9p45",
       "name": "Hessen 51.30,9.45",
       "extract": "europe/germany/hessen",
@@ -77,5 +92,5 @@
     }
   ],
   "precise": [],
-  "updatedAt": "2026-11-12T18:03:08.039Z"
+  "updatedAt": "2026-11-13T09:48:54.627Z"
 }
