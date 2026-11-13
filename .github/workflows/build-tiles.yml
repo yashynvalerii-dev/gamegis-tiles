@@ -64,7 +64,7 @@ jobs:
             if [ -n "$BEFORE" ] && [ "$BEFORE" != "0000000000000000000000000000000000000000" ] && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
               CHANGED=$(git diff --name-only "$BEFORE" "${{ github.sha }}")
               echo "changed files:"; echo "$CHANGED"
-              MAP=$(echo "$CHANGED" | grep -E '^(src/(gis|providers|export|storage|core)/|tools/(exportTiles|downloadExtract)\.js$|package\.json$)' || true)
+              MAP=$(echo "$CHANGED" | grep -E '^(src/(gis|providers|export|storage|core)/|tools/(exportTiles|downloadExtract)\.js$|package\.json$)' | grep -v '^src/export/incremental\.js$' || true)
               if [ -z "$MAP" ]; then INCR=true; echo "no map-making code changed -> incremental"; else echo "map-making code changed -> full:"; echo "$MAP"; fi
             else echo "unknown previous commit -> full"; fi
           fi

@@ -60,7 +60,7 @@ export function planIncremental(defs, prevReport, prevManifest, {bundleZoom = 13
  * Returns parts in the shape the exporter produces: {def, kind, manifest: {bundles, dataTimestamp, bundlePath}, entry}.
  * Throws on any mismatch or download error (the caller then rebuilds fully).
  */
-export async function copyReusedRegions(reuse, prevManifest, {baseUrl, outDir, fetchImpl = fetch, concurrency = 8, log = () => {}} = {}) {
+export async function copyReusedRegions(reuse, prevManifest, {baseUrl, outDir, fetchImpl = fetch, concurrency = 8, log = () => {}, retries = 4, retryDelayMs = 2000} = {}) {
   const jobs = [];
   const parts = reuse.map(({def, kind, entry}) => {
     const layer = kind === 'precise' ? prevManifest.precise[entry.precision] : prevManifest;
@@ -79,7 +79,13 @@ export async function copyReusedRegions(reuse, prevManifest, {baseUrl, outDir, f
   const worker = async () => {
     while (i < unique.length) {
       const {rel, meta} = unique[i++];
-      const res = await fetchImpl(new URL(rel, baseUrl).href, {cache: 'no-store'});
+      // Pages answers 503 now and then (2026-11-12): retry a few times before giving up.
+      let res;
+      for (let attempt = 1; ; attempt++) {
+        try { res = await fetchImpl(new URL(rel, baseUrl).href, {cache: 'no-store'}); } catch (e) { res = {ok: false, status: e.message}; }
+        if (res.ok || attempt >= retries || (typeof res.status === 'number' && res.status < 500 && res.status !== 429)) break;
+        await new Promise(r => setTimeout(r, retryDelayMs * attempt));
+      }
       if (!res.ok) throw new Error(`REUSE_DOWNLOAD_FAILED ${rel}: HTTP ${res.status}`);
       const bytes = Buffer.from(await res.arrayBuffer());
       if (sha256(bytes) !== meta.sha256) throw new Error(`REUSE_CHECKSUM_MISMATCH ${rel}`);
