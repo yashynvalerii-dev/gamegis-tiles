@@ -22,7 +22,7 @@
  *
  * Map data © OpenStreetMap contributors (ODbL). Applications must show this attribution.
  */
-export const CLIENT_VERSION = '1.6.0'; // 1.1: request endpoint v1, precise layers, manifest mirrors; 1.2: shared nodes, groups, tileStatusAt, splitBbox; 1.3: POI group; 1.4: majorRoads, waterways; 1.5: activity everywhere the site has data; 1.6: sized requests (~1 km + needM)
+export const CLIENT_VERSION = '1.7.0'; // 1.1: request endpoint v1, precise layers, manifest mirrors; 1.2: shared nodes, groups, tileStatusAt, splitBbox; 1.3: POI group; 1.4: majorRoads, waterways; 1.5: activity everywhere the site has data; 1.6: sized requests (~1 km + needM); 1.7: transport, sidewalkStreets, landUse, occupants (V8)
 /**
  * poiKind vocabulary of POI layer v1 (manifest.poiLayer.version). Stable: values are only ever ADDED, never renamed or
  * removed — skip a kind you do not know instead of failing.
@@ -35,7 +35,8 @@ export const SUPPORTED_MANIFESTS = ['GAMEGIS_TILE_MANIFEST_V2'];
 export const ATTRIBUTION = '© OpenStreetMap contributors (ODbL)';
 /** Activity reports are accepted this far outside a requested area so the area can follow the players. */
 export const ACTIVITY_REACH_KM = 8;
-const GROUP_NAMES = ['walkableWays', 'buildings', 'entrances', 'water', 'railways', 'power', 'restrictedAreas', 'restrictedWays', 'pois', 'majorRoads', 'waterways'];
+const GROUP_NAMES = ['walkableWays', 'buildings', 'entrances', 'water', 'railways', 'power', 'restrictedAreas', 'restrictedWays', 'pois', 'majorRoads', 'waterways',
+  'transport', 'sidewalkStreets', 'landUse', 'occupants'];
 
 /** Web Mercator tile of a position. */
 export function tileFor(lat, lon, z) {
@@ -95,7 +96,7 @@ const joinUrl = (base, path) => base.replace(/\/?$/, '/') + path.replace(/^\//, 
 export function toOsmElements(data, {bbox = null, holes = 'drop', groups = null, shareNodes = true} = {}) {
   let nextId = -1;
   const elements = [];
-  const emitted = new Set();
+  const emitted = new Map();   // source -> elements emitted for it (an object in two groups gets the tags of both)
   // shareNodes: one node per distinct position, as in OSM (junctions and shared walls); far fewer elements.
   const nodeAt = new Map();
   const nodeFor = ([lon, lat]) => {
@@ -121,13 +122,16 @@ export function toOsmElements(data, {bbox = null, holes = 'drop', groups = null,
   for (const g of GROUP_NAMES) if (!groups || groups.includes(g)) for (const f of data?.[g] ?? []) {
     const {sourceType, sourceId, tags} = f.properties;
     const key = g === 'pois' ? `poi:${sourceType}/${sourceId}` : `${sourceType}/${sourceId}`;
-    if (emitted.has(key)) continue;
+    if (emitted.has(key)) {
+      for (const e of emitted.get(key)) for (const [k, v] of Object.entries(tags ?? {})) if (!(k in e.tags)) e.tags[k] = v;
+      continue;
+    }
     const geom = f.geometry;
     if (bbox) {
       const b = bounds(geom);
       if (b.west > bbox.east || b.east < bbox.west || b.south > bbox.north || b.north < bbox.south) continue;
     }
-    emitted.add(key);
+    const start = elements.length;
     if (g === 'pois') {
       elements.push({type: 'node', id: nextId--, lat: geom.coordinates[1], lon: geom.coordinates[0],
         tags: {...tags, 'gamegis:source': `${sourceType}/${sourceId}`}});
@@ -144,6 +148,7 @@ export function toOsmElements(data, {bbox = null, holes = 'drop', groups = null,
     } else if (geom.type === 'MultiLineString') {
       for (const line of geom.coordinates) wayFrom(nextId--, line, tags);
     }
+    emitted.set(key, elements.slice(start).filter(e => e.tags && !e.tags['gamegis:hole_of'] && (e.type !== 'node' || g === 'pois' || geom.type === 'Point')));
   }
   return elements;
 }

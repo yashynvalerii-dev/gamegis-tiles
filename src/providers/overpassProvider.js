@@ -35,14 +35,27 @@ const POI_SELECTORS = Object.freeze([
 ]);
 const POI_EXCLUSION_SELECTORS = Object.freeze(['["landuse"~"^(cemetery|railway)$"]', '["amenity"~"^(grave_yard|school|kindergarten|childcare)$"]',
   '["highway"~"^(motorway|trunk|primary|secondary|tertiary)(_link)?$"]', '["waterway"~"^(river|canal)$"]']);
+// V8 groups (transport, sidewalkStreets, landUse, occupants); classifier.js decides what is kept.
+const V8_SELECTORS = Object.freeze(['["highway"="bus_stop"]', '["public_transport"~"^(platform|stop_position|station)$"]',
+  '["railway"~"^(tram_stop|halt|station|platform|depot|yard)$"]', '["amenity"~"^(bus_station|ferry_terminal|parking)$"]',
+  '["man_made"~"^(pier|jetty)$"]', '["leisure"~"^(marina|slipway)$"]', '["waterway"~"^(dock|boatyard)$"]', '["mooring"]',
+  '["landuse"~"^(garages|depot|railway|residential|commercial|retail|industrial|farmyard|construction)$"]',
+  '["building"~"^(garage|garages)$"]', '["amenity"~"^(school|kindergarten|childcare|hospital|university|college)$"]']);
+const V8_WAY_SELECTORS = Object.freeze(['["highway"~"^(residential|service|unclassified|living_street)$"]["sidewalk"]',
+  '["highway"~"^(residential|service|unclassified|living_street)$"]["sidewalk:left"]',
+  '["highway"~"^(residential|service|unclassified|living_street)$"]["sidewalk:right"]',
+  '["highway"~"^(residential|service|unclassified|living_street)$"]["sidewalk:both"]']);
+const V8_NODE_SELECTORS = Object.freeze(['["shop"]', '["craft"]', '["office"]', '["healthcare"]', '["amenity"]']);
 export function buildOverpassQuery({tile,bufferM=40,timeoutSec=25}={}){
   const t=validateTile(tile);
   if(!Number.isInteger(bufferM)||bufferM<30||bufferM>1000)throw new RangeError('bufferM must be integer 30..1000');
   if(!Number.isInteger(timeoutSec)||timeoutSec<1||timeoutSec>25)throw new RangeError('timeoutSec must be 1..25');
   const bbox=outwardScope(t,bufferM);
   const coords=[bbox.south,bbox.west,bbox.north,bbox.east].map(f7).join(',');
-  const clauses=['node["entrance"]','node["power"~"^(tower|pole|substation)$"]',...POI_SELECTORS.map(x=>'node'+x)];
-  for(const kind of ['way','relation']) for(const selector of [...SELECTORS,...POI_SELECTORS,...POI_EXCLUSION_SELECTORS])clauses.push(kind+selector);
+  const clauses=['node["entrance"]','node["power"~"^(tower|pole|substation)$"]',...POI_SELECTORS.map(x=>'node'+x),
+    ...V8_SELECTORS.map(x=>'node'+x),...V8_NODE_SELECTORS.map(x=>'node'+x)];
+  for(const kind of ['way','relation']) for(const selector of [...SELECTORS,...POI_SELECTORS,...POI_EXCLUSION_SELECTORS,...V8_SELECTORS])clauses.push(kind+selector);
+  for(const selector of V8_WAY_SELECTORS)clauses.push('way'+selector);
   const query=`[out:json][timeout:${timeoutSec}];(\n${clauses.map(x=>`  ${x}(${coords});`).join('\n')}\n);out body geom;`;
   return {query,bbox,tile:t,bufferM,timeoutSec,datasetId:DATASET_ID,normalizationVersion:NORMALIZATION_VERSION};
 }

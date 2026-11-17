@@ -9,15 +9,16 @@
  */
 import { assertPosition, pointInPolygon, pointOnSurface } from './geometry.js';
 import { classifyWayTags, isEntranceTags, isPowerPointTags, requiresRelationSupport, poiKindFor, POI_KINDS,
-  isPoiExclusionAreaTags, isMajorRoadTags, isMajorWaterwayTags } from './classifier.js';
+  isPoiExclusionAreaTags, isMajorRoadTags, isMajorWaterwayTags, transportKindFor, isSidewalkStreetTags, isLandUseTags,
+  occupantKindFor } from './classifier.js';
 
 export const DATASET_ID = 'OSM_MVP_BASE_V1'; // layer set is identified by NORMALIZATION_VERSION (V3 adds POWER)
-export const NORMALIZATION_VERSION = 'OSM_NORMALIZER_V7'; // V2: multipolygons; V3: power + tag allowlist; V4: site perimeters, linear military, building-on-road fix; V5: relation members of multipolygons skipped; V6: POI layer; V7: majorRoads + waterways lines
+export const NORMALIZATION_VERSION = 'OSM_NORMALIZER_V8'; // V2: multipolygons; V3: power + tag allowlist; V4: site perimeters, linear military, building-on-road fix; V5: relation members of multipolygons skipped; V6: POI layer; V7: majorRoads + waterways lines; V8: transport, sidewalkStreets, landUse, occupants + building purpose tags
 export const PROCESSED_LAYERS = Object.freeze([
   'WALKABLE', 'BUILDINGS', 'ENTRANCES', 'WATER', 'RAILWAYS', 'POWER',
 ]);
 /** Layers that never make a tile INCOMPLETE: a missing POI is a missing extra, not a safety gap. */
-export const SUPPLEMENTARY_LAYERS = Object.freeze(['POIS', 'MAJOR_ROADS', 'WATERWAYS']);
+export const SUPPLEMENTARY_LAYERS = Object.freeze(['POIS', 'MAJOR_ROADS', 'WATERWAYS', 'TRANSPORT', 'SIDEWALK_STREETS', 'LAND_USE', 'OCCUPANTS']);
 export const POI_LAYER_VERSION = 1;
 export const MAX_POIS_PER_TILE = 200;
 
@@ -33,9 +34,21 @@ export const PUBLISHED_TAG_KEYS = Object.freeze(new Set([
   'natural', 'water', 'waterway', 'intermittent', 'landuse', 'military',
   'railway', 'usage', 'electrified', 'power', 'voltage', 'line', 'cables',
 ]));
-function publishedTags(tags) {
+/** V8 (owner 2026-11-17, client application): what a building is used for, and the tags of the new supplementary groups. */
+const EXTRA_TAG_KEYS = Object.freeze({
+  building: new Set(['amenity', 'shop', 'craft', 'office', 'industrial', 'healthcare', 'man_made', 'building:use', 'historic']),
+  transport: new Set(['name', 'highway', 'public_transport', 'railway', 'amenity', 'man_made', 'leisure', 'waterway', 'mooring',
+    'parking', 'access', 'landuse', 'building', 'service', 'bus', 'tram', 'train', 'subway', 'ferry', 'covered', 'shelter', 'layer', 'level']),
+  sidewalk_street: new Set(['name', 'highway', 'sidewalk', 'sidewalk:left', 'sidewalk:right', 'sidewalk:both', 'access', 'service',
+    'lit', 'surface', 'maxspeed', 'oneway', 'layer', 'bridge', 'tunnel']),
+  land_use: new Set(['landuse', 'amenity', 'name', 'access']),
+});
+function publishedTags(tags, featureClass) {
+  const extra = EXTRA_TAG_KEYS[featureClass];
   const out = {};
-  for (const [k, v] of Object.entries(tags)) if (PUBLISHED_TAG_KEYS.has(k)) out[k] = v;
+  for (const [k, v] of Object.entries(tags)) {
+    if (extra && featureClass !== 'building' ? extra.has(k) : PUBLISHED_TAG_KEYS.has(k) || extra?.has(k)) out[k] = v;
+  }
   return out;
 }
 
@@ -51,6 +64,10 @@ const LAYER_FOR_CLASS = Object.freeze({
   poi: 'pois',
   major_road: 'majorRoads',
   waterway: 'waterways',
+  transport: 'transport',
+  sidewalk_street: 'sidewalkStreets',
+  land_use: 'landUse',
+  occupant: 'occupants',
 });
 const POLYGON_CLASSES = new Set(['building', 'water', 'restricted_area']);
 
@@ -276,9 +293,10 @@ export function normalizeOsmMvpBase(payload, { provider } = {}) {
   const layers = {
     walkableWays: [], buildings: [], entrances: [], water: [], railways: [], power: [],
     restrictedAreas: [], restrictedWays: [], pois: [], majorRoads: [], waterways: [],
+    transport: [], sidewalkStreets: [], landUse: [], occupants: [],
   };
   const features = [];
-  const makeFeature = (sourceType, sourceId, featureClass, geometry, tags) => {
+  const makeFeature = (sourceType, sourceId, featureClass, geometry, tags, anchor = null) => {
     const feature = {
       provider,
       sourceType,
@@ -286,8 +304,9 @@ export function normalizeOsmMvpBase(payload, { provider } = {}) {
       featureClass,
       geometry,
       bbox: boundsFor(geometry),
-      tags: featureClass === 'poi' ? tags : publishedTags(safeTags(tags)),
+      tags: featureClass === 'poi' || featureClass === 'occupant' ? tags : publishedTags(safeTags(tags), featureClass),
       normalizationVersion: NORMALIZATION_VERSION,
+      ...(anchor ? { anchor } : {}),
     };
     features.push(feature);
     layers[LAYER_FOR_CLASS[featureClass]].push(feature);
@@ -381,6 +400,7 @@ export function normalizeOsmMvpBase(payload, { provider } = {}) {
     if (geo.error) { warnings.push({ code: 'SUPPLEMENTARY_LINE_GEOMETRY_UNAVAILABLE', sourceType: 'way', sourceId: way.id }); continue; }
     makeFeature('way', way.id, cls, { type: 'LineString', coordinates: geo.coordinates.map((p) => [...p]) }, way.tags);
   }
+  const extraStats = normalizeExtras({ nodeElements, nodes, ways, relations, wayById, layers, makeFeature, warnings });
 
   return {
     datasetId: DATASET_ID,
@@ -395,7 +415,7 @@ export function normalizeOsmMvpBase(payload, { provider } = {}) {
       normalizedWayCount, ignoredWayCount, brokenRelevantWayCount,
       unsupportedRelevantRelationCount, assembledMultipolygonCount,
       featureCount: features.length,
-      ...poiStats, majorRoadCount: layers.majorRoads.length, waterwayCount: layers.waterways.length,
+      ...poiStats, majorRoadCount: layers.majorRoads.length, waterwayCount: layers.waterways.length, ...extraStats,
     },
     diagnostics: {
       complete: errors.length === 0,
@@ -464,6 +484,46 @@ function normalizePois({ nodeElements, nodes, ways, relations, wayById, layers, 
     makeFeature(c.sourceType, c.sourceId, 'poi', { type: 'Point', coordinates: c.point }, poiTags(c.kind, c.tags));
   }
   return { poiCount: layers.pois.length, poiExcludedCount: excluded };
+}
+
+/**
+ * V8 supplementary groups (geography only, warnings only):
+ * - transport: stops, platforms, stations, piers, marinas, parking, garages, depots, yards. Nodes -> Point; closed ways
+ *   and multipolygons -> area with an `anchor` point inside it; open ways (platform edges, piers) -> LineString.
+ * - sidewalkStreets: minor streets only where a sidewalk is tagged.
+ * - landUse: zones (residential, commercial, retail, industrial, ...; school, kindergarten, hospital, university areas).
+ * - occupants: nodes with shop|amenity|craft|office|healthcare (no street furniture): kind tag + name only.
+ */
+function normalizeExtras({ nodeElements, nodes, ways, relations, wayById, layers, makeFeature, warnings }) {
+  for (const el of nodeElements) {
+    const pos = nodes.get(el.id); if (!pos) continue;
+    if (transportKindFor(el.tags)) makeFeature('node', el.id, 'transport', { type: 'Point', coordinates: [...pos] }, el.tags);
+    const occ = occupantKindFor(el.tags);
+    if (occ) makeFeature('node', el.id, 'occupant', { type: 'Point', coordinates: [...pos] }, poiTags(occ, el.tags));
+  }
+  for (const way of ways) {
+    const transport = transportKindFor(way.tags), street = isSidewalkStreetTags(way.tags), zone = isLandUseTags(way.tags);
+    if (!transport && !street && !zone) continue;
+    const geo = wayCoordinates(way, nodes);
+    if (geo.error) { warnings.push({ code: 'SUPPLEMENTARY_GEOMETRY_UNAVAILABLE', sourceType: 'way', sourceId: way.id }); continue; }
+    const c = geo.coordinates, closed = isValidClosedRing(c);
+    const area = closed ? { type: 'Polygon', coordinates: [c.map((p) => [...p])] } : null;
+    const line = { type: 'LineString', coordinates: c.map((p) => [...p]) };
+    if (transport) makeFeature('way', way.id, 'transport', area ?? line, way.tags, area ? pointOnSurface(area) : null);
+    if (street) makeFeature('way', way.id, 'sidewalk_street', line, way.tags);
+    if (zone && area) makeFeature('way', way.id, 'land_use', area, way.tags);
+  }
+  for (const rel of relations) {
+    if (String(rel.tags?.type ?? '').toLowerCase() !== 'multipolygon') continue;
+    const transport = transportKindFor(rel.tags), zone = isLandUseTags(rel.tags);
+    if (!transport && !zone) continue;
+    const g = relationPolygon(rel, wayById, nodes);
+    if (!g) { warnings.push({ code: 'SUPPLEMENTARY_GEOMETRY_UNAVAILABLE', sourceType: 'relation', sourceId: rel.id }); continue; }
+    if (transport) makeFeature('relation', rel.id, 'transport', g, rel.tags, pointOnSurface(g));
+    if (zone) makeFeature('relation', rel.id, 'land_use', g, rel.tags);
+  }
+  return { transportCount: layers.transport.length, sidewalkStreetCount: layers.sidewalkStreets.length,
+    landUseCount: layers.landUse.length, occupantCount: layers.occupants.length };
 }
 
 /** Keeps at most `max` POIs: named first, then in POI_KINDS order, then by id (stable). Returns {kept, trimmed}. */

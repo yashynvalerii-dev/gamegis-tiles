@@ -1,0 +1,37 @@
+# Trial build of the permanent regions with the code of this branch: measures size per data group. Never publishes.
+name: measure
+on:
+  workflow_dispatch:
+  push:
+    branches: [v8-measure]
+permissions:
+  contents: read
+jobs:
+  measure:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+      - uses: actions/cache/restore@v4
+        with:
+          path: data/extracts
+          key: extracts-none
+          restore-keys: extracts-
+      - run: npm run download-extract -- --config regions.json
+      - run: npm run export-tiles -- --config regions.json --out site
+      - name: Size per group
+        run: |
+          node -e "
+            const fs=require('fs'),path=require('path'),zlib=require('zlib');
+            const walk=d=>fs.readdirSync(d,{withFileTypes:true}).flatMap(e=>e.isDirectory()?walk(path.join(d,e.name)):[path.join(d,e.name)]);
+            const files=walk('site/bundles').filter(f=>f.endsWith('.json.gz'));
+            let gz=0; const raw={}, count={};
+            for(const f of files){ const b=fs.readFileSync(f); gz+=b.length; const j=JSON.parse(zlib.gunzipSync(b));
+              for(const [g,arr] of Object.entries(j.data)){ raw[g]=(raw[g]||0)+JSON.stringify(arr).length; count[g]=(count[g]||0)+arr.length; } }
+            const tot=Object.values(raw).reduce((a,b)=>a+b,0);
+            console.log('bundles',files.length,'stored (gzip) MB',(gz/1048576).toFixed(1),'raw JSON MB',(tot/1048576).toFixed(1));
+            for(const g of Object.keys(raw).sort((a,b)=>raw[b]-raw[a])) console.log(g.padEnd(16),String(count[g]).padStart(8),'features',(raw[g]/1048576).toFixed(1).padStart(7),'MB raw',(100*raw[g]/tot).toFixed(1).padStart(5)+'%');
+          " | tee -a "$GITHUB_STEP_SUMMARY"
