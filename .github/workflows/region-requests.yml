@@ -22,6 +22,12 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: '24'
+      # Last good copy of the Geofabrik region index: planning goes on when Geofabrik refuses this machine.
+      - uses: actions/cache/restore@v4
+        with:
+          path: data/geofabrik-index.json
+          key: geofabrik-index-${{ github.run_id }}
+          restore-keys: geofabrik-index-
       - name: Report which optional secrets are set (values never printed)
         run: echo "::notice::secrets set - requests:${{ secrets.REQUESTS_CSV_URL != '' }} cloudflare-token:${{ secrets.CLOUDFLARE_API_TOKEN != '' }} cloudflare-account:${{ secrets.CLOUDFLARE_ACCOUNT_ID != '' }}"
       - id: plan
@@ -30,7 +36,17 @@ jobs:
           REQUESTS_CSV_URL: ${{ secrets.REQUESTS_CSV_URL }}
           REQUESTS_APPS: ${{ secrets.REQUESTS_APPS }}
           TILES_SITE_URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/
-        run: node tools/processRequests.js --config regions.json --out requested-regions.json
+        run: |
+          mkdir -p data
+          node tools/processRequests.js --config regions.json --out requested-regions.json --index-cache data/geofabrik-index.json
+      - name: Keep the fresh index copy (at most once a day)
+        id: idxday
+        run: echo "day=$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/save@v4
+        continue-on-error: true   # the key of today already exists after the first run of the day
+        with:
+          path: data/geofabrik-index.json
+          key: geofabrik-index-${{ steps.idxday.outputs.day }}
       - name: Commit new regions / pinned usage (observation only, never rebuilds by itself)
         if: steps.plan.outputs.changed == 'true' || steps.plan.outputs.usage_changed == 'true'
         run: |

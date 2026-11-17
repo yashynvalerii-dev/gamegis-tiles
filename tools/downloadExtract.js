@@ -1,7 +1,10 @@
 #!/usr/bin/env node
 /**
  * Downloads Geofabrik extracts (.osm.pbf, MD5 verified) and region boundaries (.poly).
- * Only download.geofabrik.de is used. Geofabrik updates extracts about once a day.
+ * Source: download.geofabrik.de (updates about once a day). When Geofabrik refuses or fails (2026-11-16: it refused
+ * some GitHub build machines), the build uses the copy already in the build cache (a few days older, no request at all);
+ * only a region with no cached copy is fetched once from download.openstreetmap.fr, and only when that server has
+ * exactly the same region (never a bigger file). The extract and its boundary always come from the same source.
  *
  *   npm.cmd run download-extract                               Thuringia (default)
  *   npm.cmd run download-extract -- --region europe/ukraine    one extract + its .poly
@@ -18,6 +21,9 @@ const projectDir = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const dir = join(projectDir, 'data', 'extracts');
 const UA = {'user-agent': 'GameGIS-Broker/0.1 extract-download'};
 const BASE = 'https://download.geofabrik.de/';
+export const OSMFR = 'https://download.openstreetmap.fr/';
+/** openstreetmap.fr names use underscores: europe/germany/nordrhein-westfalen -> europe/germany/nordrhein_westfalen. */
+export const osmfrPath = region => region.replaceAll('-', '_');
 const valid = r => /^[a-z-]+(\/[a-z-]+){0,3}$/.test(r ?? '');
 const lastPart = p => p.split('/').pop();
 
@@ -35,8 +41,11 @@ async function md5Of(path) {
 export async function withRetry(fn, {label = 'download', delaysS = [15, 60, 180], sleep = s => new Promise(r => setTimeout(r, s * 1000)), log = console.log} = {}) {
   for (let attempt = 0; ; attempt++) {
     try { return await fn(); } catch (e) {
-      const why = e?.cause?.message ? `${e.message} (${e.cause.message})` : String(e?.message ?? e);
-      if (e?.permanent || attempt >= delaysS.length) throw new Error(`${label}: ${why}`);
+      const cause = [e?.cause?.code, e?.cause?.message].filter(Boolean).join(' ');   // 2026-11-16: bare "fetch failed"
+      const why = cause ? `${e.message} (${cause})` : String(e?.message ?? e);
+      // a refused connection will not change on this machine: one short retry, then give up quickly
+      const refused = e?.cause?.code === 'ECONNREFUSED' && attempt >= 1;
+      if (e?.permanent || refused || attempt >= delaysS.length) throw Object.assign(new Error(`${label}: ${why}`), {cause: e?.cause});
       log(`  ${label}: ${why} — retry ${attempt + 1}/${delaysS.length} in ${delaysS[attempt]} s`);
       await sleep(delaysS[attempt]);
     }
@@ -79,13 +88,20 @@ export async function pickSource(region, {fetchImpl = fetch, now = new Date()} =
 /** Downloads the extract (saved as <name>-latest.osm.pbf), verifying the published MD5. */
 async function downloadExtract(region) {
   const name = lastPart(region);
-  const target = join(dir, `${name}-latest.osm.pbf`), part = target + '.part';
+  const target = join(dir, `${name}-latest.osm.pbf`);
   const {url, expected} = await pickSource(region);
   // Restored from the build cache with the same published MD5: nothing to download (spares Geofabrik and time).
   if (existsSync(target) && await md5Of(target) === expected) {
     console.log(`OK: ${target} (${(statSync(target).size / 1048576).toFixed(1)} MB, cached, MD5 verified)`);
-    return;
+    return 'cached';
   }
+  await fetchTo(url, expected, name);
+  return 'downloaded';
+}
+
+/** Streams url into <name>-latest.osm.pbf (via .part), aborting a stalled transfer, and checks the MD5. */
+async function fetchTo(url, expected, name) {
+  const target = join(dir, `${name}-latest.osm.pbf`), part = target + '.part';
   console.log(`Downloading ${url}`);
   const idle = idleAbort();
   try {
@@ -111,6 +127,21 @@ async function downloadExtract(region) {
   if (actual !== expected) { rmSync(part, {force: true}); throw new Error(`MD5 mismatch for ${name} (expected ${expected}, got ${actual}); file deleted`); }
   renameSync(part, target);
   console.log(`OK: ${target} (${(statSync(target).size / 1048576).toFixed(1)} MB, MD5 verified)`);
+}
+
+/** Fallback: the same region from download.openstreetmap.fr, with its own boundary (saved as <name>.poly). */
+async function downloadFromOsmfr(region) {
+  const name = lastPart(region), url = `${OSMFR}extracts/${osmfrPath(region)}.osm.pbf`;
+  const res = await fetch(url + '.md5', {headers: UA});
+  if (!res.ok) throw httpError(`openstreetmap.fr has no ${osmfrPath(region)}`, res.status);
+  const expected = (await res.text()).trim().split(/\s+/)[0].toLowerCase();
+  if (!/^[0-9a-f]{32}$/.test(expected)) throw Object.assign(new Error(`Unexpected MD5 file format at ${url}.md5`), {permanent: true});
+  const poly = await fetch(`${OSMFR}polygons/${osmfrPath(region)}.poly`, {headers: UA});
+  if (!poly.ok) throw httpError(`openstreetmap.fr boundary ${osmfrPath(region)}.poly`, poly.status);
+  const polyText = await poly.text();
+  await fetchTo(url, expected, name);
+  writeFileSync(join(dir, `${name}.poly`), polyText);   // boundary of THIS extract (never Geofabrik's)
+  console.log(`OK: ${name}.poly (openstreetmap.fr boundary)`);
 }
 
 /** Downloads <region>.poly (the boundary of the area Geofabrik cut). */
@@ -157,7 +188,29 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     mkdirSync(dir, {recursive: true});
     // --prune (full builds): drop extracts no region uses, so the build cache does not carry them.
     if (prune) for (const f of staleExtracts(readdirSync(dir), extracts)) { rmSync(join(dir, f), {force: true}); console.log(`Removed unused extract ${f}`); }
-    for (const r of extracts) await withRetry(() => downloadExtract(r), {label: r});
-    for (const p of polys) await withRetry(() => downloadPoly(p), {label: `${p}.poly`});
+    const keepPoly = new Set();   // extracts not from Geofabrik this run: their boundary must stay paired with them
+    const fresh = new Set();      // freshly downloaded from Geofabrik: their boundary must be fresh too
+    for (const r of extracts) {
+      try { if (await withRetry(() => downloadExtract(r), {label: r}) === 'downloaded') fresh.add(lastPart(r)); continue; } catch (e) {
+        const name = lastPart(r);
+        if (existsSync(join(dir, `${name}-latest.osm.pbf`))) {
+          console.log(`::warning::${e.message} — using the cached ${name} extract (verified when it was downloaded; data a few days older)`);
+          keepPoly.add(name); continue;
+        }
+        try {
+          await withRetry(() => downloadFromOsmfr(r), {label: `${r} (openstreetmap.fr)`, delaysS: [30]});
+          console.log(`::warning::${e.message} — ${name} taken from openstreetmap.fr instead`);
+          keepPoly.add(name);
+        } catch (e2) { throw new Error(`${e.message}; fallback: ${e2.message}`); }
+      }
+    }
+    for (const p of polys) {
+      const polyPath = join(dir, `${lastPart(p)}.poly`);
+      if (keepPoly.has(lastPart(p)) && existsSync(polyPath)) { console.log(`OK: ${polyPath} (kept with its extract)`); continue; }
+      try { await withRetry(() => downloadPoly(p), {label: `${p}.poly`}); } catch (e) {
+        if (!existsSync(polyPath) || fresh.has(lastPart(p))) throw e;
+        console.log(`::warning::${e.message} — using the cached ${lastPart(p)}.poly`);
+      }
+    }
   } catch (e) { console.error('FAILED:', e.message); process.exitCode = 1; }
 }

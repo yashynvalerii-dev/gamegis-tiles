@@ -15,6 +15,10 @@ on:
         description: 'Rebuild only changed regions, copy the rest from the published site'
         type: boolean
         default: false
+      attempt:
+        description: 'Attempt number (set automatically when a download failed and the build restarts on a new machine)'
+        type: string
+        default: '1'
   workflow_call:
     inputs:
       incremental:
@@ -28,6 +32,7 @@ permissions:
   contents: write
   pages: write
   id-token: write
+  actions: write   # restart on a new machine when a source refuses this one
 concurrency:
   group: pages
   cancel-in-progress: false
@@ -104,6 +109,17 @@ jobs:
         run: |
           curl -fsS "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/export-report.json?v=${{ github.run_id }}" -o prev-report.json || echo "no previous report to compare"
           node tools/checkBuild.js --prev prev-report.json --next site/export-report.json --config regions.json --out site/build-check.json ${{ inputs.accept && '--accept' || '' }} | tee diag/build-check.json
+      # Geofabrik refuses some build machines (2026-11-16): after a failed download, start the same build again on a new
+      # machine, at most 3 attempts in all, 5 minutes apart. A refused connection costs the source nothing.
+      - name: Restart on a new machine after a failed download
+        if: failure() && steps.download.outcome == 'failure' && fromJSON(inputs.attempt || '1') < 3
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          NEXT=$(( ${{ inputs.attempt || '1' }} + 1 ))
+          echo "::warning::download failed on this machine; restarting as attempt $NEXT of 3 in 5 minutes"
+          sleep 300
+          gh workflow run build-tiles.yml --repo "$GITHUB_REPOSITORY" --ref main -f incremental=${{ steps.mode.outputs.incremental }} -f attempt=$NEXT
       - name: Publish diagnostics on failure (branch ci-diagnostics)
         if: failure()
         run: |

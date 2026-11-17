@@ -21,6 +21,7 @@ const UA = {'user-agent': 'GameGIS-Broker/0.1 region-requests'};
  * REQUESTS_CSV_URL secret of the tiles repository, never from the public regions.json.
  */
 export async function processRequests({configPath = 'regions.json', outPath = 'requested-regions.json', usagePath = 'pinned-usage.json', fetchImpl = fetch,
+  indexCachePath = null,
   now = new Date(), csvUrl = process.env.REQUESTS_CSV_URL, siteUrl = process.env.TILES_SITE_URL,
   apps = (process.env.REQUESTS_APPS ?? '').split(',').map(x => x.trim()).filter(Boolean)} = {}) {
   const config = JSON.parse(readFileSync(configPath, 'utf8'));
@@ -48,7 +49,18 @@ export async function processRequests({configPath = 'regions.json', outPath = 'r
   const sizesMB = Object.fromEntries((report?.regions ?? []).map(r => [r.id, (r.storedBytes ?? 0) / 1048576]));
   const pinnedMB = config.regions.reduce((a, r) => a + (sizesMB[r.id] ?? 0), 0);
 
-  const index = await (await get('https://download.geofabrik.de/index-v1.json', 'Geofabrik index')).json();
+  // Geofabrik sometimes refuses build machines (2026-11-16): fall back to the last saved copy of its index
+  // (region outlines change rarely), so planning does not stop and does not hammer the server.
+  let index;
+  try {
+    const text = await (await get('https://download.geofabrik.de/index-v1.json', 'Geofabrik index')).text();
+    index = JSON.parse(text);
+    if (indexCachePath) writeFileSync(indexCachePath, text);
+  } catch (e) {
+    if (!indexCachePath || !existsSync(indexCachePath)) throw e;
+    console.log(`::warning::Geofabrik index unavailable (${e.message}${e.cause?.code ? ' ' + e.cause.code : ''}); using the saved copy`);
+    index = JSON.parse(readFileSync(indexCachePath, 'utf8'));
+  }
   const {regions, changes, pinnedRequests} = planDemand(requests, config.regions, requested.regions, index, {
     maxNewPerRun: s.maxNewPerRun ?? 2, maxTotalRegions: s.maxTotalRegions ?? 15, budgetMB: s.budgetMB ?? 700,
     sizesMB, pinnedMB, isPublished, now, ...pick(s, ['windowDays', 'activityDays', 'minRadiusKm', 'maxRadiusKm', 'marginKm', 'reachKm'])});
@@ -73,7 +85,7 @@ export async function processRequests({configPath = 'regions.json', outPath = 'r
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const a = process.argv.slice(2), opt = k => { const i = a.indexOf(k); return i >= 0 ? a[i + 1] : undefined; };
-  processRequests({configPath: opt('--config') ?? 'regions.json', outPath: opt('--out') ?? 'requested-regions.json'}).then(r => {
+  processRequests({configPath: opt('--config') ?? 'regions.json', outPath: opt('--out') ?? 'requested-regions.json', indexCachePath: opt('--index-cache') ?? null}).then(r => {
     console.log(JSON.stringify(r, null, 2));
     console.log(`::notice::requests ${r.requests ?? 0}, rejected ${r.rejected ?? 0}, added ${(r.added ?? []).length}, resized ${(r.resized ?? []).length}, changed ${r.changed}${r.configured === false ? ' (not configured)' : ''}`);
     if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `changed=${r.changed}\nusage_changed=${Boolean(r.usageChanged)}\n`);
