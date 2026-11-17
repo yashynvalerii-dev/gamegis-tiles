@@ -7,7 +7,12 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
+      - run: node --version
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
       - run: |
+          node --version
           UA="GameGIS-Broker/diagnostic"
           echo "runner ip: $(curl -sS --max-time 10 https://api.ipify.org || echo unknown)"
           getent hosts download.geofabrik.de || echo "DNS failed"
