@@ -1,0 +1,20 @@
+# Manual diagnostic: can the build machines reach Geofabrik? Tiny requests only (HEAD / small text files).
+name: geofabrik-check
+on: workflow_dispatch
+permissions: {}
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - run: |
+          UA="GameGIS-Broker/diagnostic"
+          echo "runner ip: $(curl -sS --max-time 10 https://api.ipify.org || echo unknown)"
+          getent hosts download.geofabrik.de || echo "DNS failed"
+          for u in https://download.geofabrik.de/europe/germany/thueringen-latest.osm.pbf.md5 \
+                   https://download.geofabrik.de/europe/germany/thueringen-latest.osm.pbf; do
+            echo "== $u"
+            curl -sS -I -A "$UA" --max-time 30 -o /dev/null -w "http %{http_code} ip %{remote_ip} connect %{time_connect}s tls %{time_appconnect}s\n" "$u" || echo "curl exit $?"
+          done
+          echo "== verbose md5"
+          curl -sS -v -A "$UA" --max-time 30 https://download.geofabrik.de/europe/germany/thueringen-latest.osm.pbf.md5 2>&1 | grep -E "^\*|^< HTTP|^[0-9a-f]{32}" | head -30 || true
