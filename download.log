@@ -1,0 +1,8 @@
+
+> gamegis-tiles@1.0.0 download-extract
+> node tools/downloadExtract.js --prune --config regions.json --config requested-regions.json
+
+  europe/germany/thueringen: fetch failed — retry 1/3 in 15 s
+  europe/germany/thueringen: fetch failed — retry 2/3 in 60 s
+  europe/germany/thueringen: fetch failed — retry 3/3 in 180 s
+FAILED: europe/germany/thueringen: fetch failed
