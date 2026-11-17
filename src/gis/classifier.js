@@ -102,9 +102,63 @@ export function isPoiExclusionAreaTags(tags = {}) {
     ['grave_yard', 'school', 'kindergarten', 'childcare'].includes(value(tags, 'amenity'));
 }
 
+/**
+ * Transport and safe places (owner 2026-11-17, client application request): stops, platforms, stations, piers, marinas, parking,
+ * garages, depots and yards. Geography only; what a game puts there is the game's decision.
+ */
+const TRANSPORT_PT = new Set(['platform', 'stop_position', 'station']);
+const TRANSPORT_RAIL = new Set(['tram_stop', 'halt', 'station', 'platform', 'depot', 'yard']);
+const TRANSPORT_MANMADE = new Set(['pier', 'jetty']);
+const TRANSPORT_LEISURE = new Set(['marina', 'slipway']);
+const TRANSPORT_WATERWAY = new Set(['dock', 'boatyard']);
+export function transportKindFor(tags = {}) {
+  if (value(tags, 'highway') === 'bus_stop') return 'highway=bus_stop';
+  if (TRANSPORT_PT.has(value(tags, 'public_transport'))) return `public_transport=${value(tags, 'public_transport')}`;
+  if (TRANSPORT_RAIL.has(value(tags, 'railway'))) return `railway=${value(tags, 'railway')}`;
+  if (['bus_station', 'ferry_terminal', 'parking'].includes(value(tags, 'amenity'))) return `amenity=${value(tags, 'amenity')}`;
+  if (TRANSPORT_MANMADE.has(value(tags, 'man_made'))) return `man_made=${value(tags, 'man_made')}`;
+  if (TRANSPORT_LEISURE.has(value(tags, 'leisure'))) return `leisure=${value(tags, 'leisure')}`;
+  if (TRANSPORT_WATERWAY.has(value(tags, 'waterway'))) return `waterway=${value(tags, 'waterway')}`;
+  if (['garages', 'depot', 'railway'].includes(value(tags, 'landuse'))) return `landuse=${value(tags, 'landuse')}`;
+  if (['garage', 'garages'].includes(value(tags, 'building'))) return `building=${value(tags, 'building')}`;
+  if (active(tags, 'mooring')) return 'mooring';
+  return null;
+}
+export const isTransportTags = (tags = {}) => transportKindFor(tags) !== null;
+
+/** Minor streets published only where a sidewalk is tagged (owner 2026-11-17: exception to "no other roads"). */
+const MINOR_STREETS = new Set(['residential', 'service', 'unclassified', 'living_street']);
+const SIDEWALK_KEYS = ['sidewalk', 'sidewalk:left', 'sidewalk:right', 'sidewalk:both'];
+export function isSidewalkStreetTags(tags = {}) {
+  if (!MINOR_STREETS.has(value(tags, 'highway'))) return false;
+  return SIDEWALK_KEYS.some(k => value(tags, k) && !['no', 'none'].includes(value(tags, k)));
+}
+
+/** Land-use zones that hint what a building is used for (and schools/kindergartens: places games never lure to). */
+const LANDUSE_ZONES = new Set(['residential', 'commercial', 'retail', 'industrial', 'farmyard', 'garages', 'construction', 'depot']);
+const AMENITY_ZONES = new Set(['school', 'kindergarten', 'childcare', 'hospital', 'university', 'college']);
+export const isLandUseTags = (tags = {}) => LANDUSE_ZONES.has(value(tags, 'landuse')) || AMENITY_ZONES.has(value(tags, 'amenity'));
+
+/** Points inside or at buildings that say what is there (a shop on the ground floor...). Street furniture is not. */
+const OCCUPANT_KEYS = ['shop', 'amenity', 'craft', 'office', 'healthcare'];
+const NOT_OCCUPANT_AMENITY = new Set(['bench', 'waste_basket', 'waste_disposal', 'recycling', 'bicycle_parking', 'post_box',
+  'vending_machine', 'parking_entrance', 'parking_space', 'motorcycle_parking', 'telephone', 'clock', 'hunting_stand',
+  'drinking_water', 'fountain', 'shelter', 'bbq', 'charging_station', 'atm', 'loading_dock', 'grit_bin', 'parcel_locker',
+  'letter_box', 'water_point', 'watering_place', 'toilets', 'parking', 'bus_station', 'ferry_terminal', 'place_of_worship', 'bicycle_rental']);
+export function occupantKindFor(tags = {}) {
+  for (const key of OCCUPANT_KEYS) {
+    const v = value(tags, key);
+    if (!v || v === 'no' || v === 'vacant') continue;
+    if (key === 'amenity' && NOT_OCCUPANT_AMENITY.has(v)) continue;
+    return `${key}=${v}`;
+  }
+  return null;
+}
+export const isOccupantTags = (tags = {}) => occupantKindFor(tags) !== null;
+
 /** Nodes published as standalone point features. */
 export function isPointFeatureTags(tags = {}) {
-  return isEntranceTags(tags) || isPowerPointTags(tags) || isPoiTags(tags);
+  return isEntranceTags(tags) || isPowerPointTags(tags) || isPoiTags(tags) || isTransportTags(tags) || isOccupantTags(tags);
 }
 
 /** Supplementary lines (owner 2026-11-01, gameplay safety/reachability): busy roads and big waterways. */
@@ -114,9 +168,10 @@ const MAJOR_WATERWAYS = new Set(['river', 'canal']);
 export const isMajorRoadTags = (tags = {}) => MAJOR_ROADS.has(value(tags, 'highway'));
 export const isMajorWaterwayTags = (tags = {}) => MAJOR_WATERWAYS.has(value(tags, 'waterway'));
 
-/** Ways / relations to keep when reading an extract beyond the base classes: POIs, their exclusion areas, extra lines. */
+/** Ways / relations to keep when reading an extract beyond the base classes: POIs, their exclusion areas, extra layers. */
 export function isPoiRelatedTags(tags = {}) {
-  return isPoiTags(tags) || isPoiExclusionAreaTags(tags) || isMajorRoadTags(tags) || isMajorWaterwayTags(tags);
+  return isPoiTags(tags) || isPoiExclusionAreaTags(tags) || isMajorRoadTags(tags) || isMajorWaterwayTags(tags) ||
+    isTransportTags(tags) || isSidewalkStreetTags(tags) || isLandUseTags(tags);
 }
 
 /** OSM way roles, no game placement decisions or implicit distance buffers. */

@@ -29,8 +29,10 @@ export const MANIFEST_FORMAT = 'GAMEGIS_TILE_MANIFEST_V2'; // V2: gzip-stored bu
 export const BUNDLE_PATH_TEMPLATE = 'bundles/{z}/{x}/{y}.json.gz';
 export const TILE_ZOOM = 15;
 const GROUPS = {walkable: 'walkableWays', building: 'buildings', entrance: 'entrances', water: 'water',
-  railway: 'railways', power: 'power', restricted_area: 'restrictedAreas', restricted_way: 'restrictedWays', poi: 'pois', major_road: 'majorRoads', waterway: 'waterways'};
-const emptyGroups = () => ({walkableWays: [], buildings: [], entrances: [], water: [], railways: [], power: [], restrictedAreas: [], restrictedWays: [], pois: [], majorRoads: [], waterways: []});
+  railway: 'railways', power: 'power', restricted_area: 'restrictedAreas', restricted_way: 'restrictedWays', poi: 'pois', major_road: 'majorRoads', waterway: 'waterways',
+  transport: 'transport', sidewalk_street: 'sidewalkStreets', land_use: 'landUse', occupant: 'occupants'};
+const emptyGroups = () => ({walkableWays: [], buildings: [], entrances: [], water: [], railways: [], power: [], restrictedAreas: [], restrictedWays: [], pois: [], majorRoads: [], waterways: [],
+  transport: [], sidewalkStreets: [], landUse: [], occupants: []});
 
 const isRelevantWay = tags => classifyWayTags(tags).length > 0 || isPoiRelatedTags(tags);
 const isRelevantRelation = tags => requiresRelationSupport(tags) || classifyWayTags(tags).length > 0 || isPoiRelatedTags(tags);
@@ -360,7 +362,8 @@ export function exportRegion({model, outDir, boundary, publish = null, bundleZoo
             continue;
           }
           groups[GROUPS[f.featureClass]].push({type: 'Feature', geometry: roundGeometry(f.geometry, coordDecimals),
-            properties: {tags: f.tags, sourceType: f.sourceType, sourceId: f.sourceId}});
+            properties: {tags: f.tags, sourceType: f.sourceType, sourceId: f.sourceId,
+              ...(f.anchor ? {anchor: roundGeometry({type: 'Point', coordinates: f.anchor}, coordDecimals).coordinates} : {})}});
         }
       }
       if (!anyTile) continue;
