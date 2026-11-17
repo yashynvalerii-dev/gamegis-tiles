@@ -16,5 +16,12 @@ jobs:
             echo "== $u"
             curl -sS -I -A "$UA" --max-time 30 -o /dev/null -w "http %{http_code} ip %{remote_ip} connect %{time_connect}s tls %{time_appconnect}s\n" "$u" || echo "curl exit $?"
           done
+          echo "== redirect target"
+          curl -sS -I -A "$UA" --max-time 30 https://download.geofabrik.de/europe/germany/thueringen-latest.osm.pbf | grep -iE "^(HTTP|location|retry|x-)" || true
+          LOC=$(curl -sS -I -A "$UA" --max-time 30 https://download.geofabrik.de/europe/germany/thueringen-latest.osm.pbf | awk 'tolower($1)=="location:"{print $2}' | tr -d '\r')
+          echo "location: $LOC"
+          [ -n "$LOC" ] && { getent hosts "$(echo "$LOC" | sed -E 's#https?://([^/]+)/.*#\1#')" || echo "DNS of target failed"; curl -sS -I -A "$UA" --max-time 30 -o /dev/null -w "target http %{http_code} ip %{remote_ip} connect %{time_connect}s\n" "$LOC" || echo "target curl exit $?"; }
+          echo "== node fetch"
+          node -e "fetch('https://download.geofabrik.de/europe/germany/thueringen-latest.osm.pbf',{method:'HEAD',headers:{'User-Agent':'$UA'}}).then(r=>console.log('node',r.status,r.url)).catch(e=>console.log('node error',e.message,e.cause?.code,e.cause?.message))"
           echo "== verbose md5"
           curl -sS -v -A "$UA" --max-time 30 https://download.geofabrik.de/europe/germany/thueringen-latest.osm.pbf.md5 2>&1 | grep -E "^\*|^< HTTP|^[0-9a-f]{32}" | head -30 || true
