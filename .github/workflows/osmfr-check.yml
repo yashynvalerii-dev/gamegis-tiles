@@ -1,0 +1,21 @@
+# Manual diagnostic: layout of the fallback source download.openstreetmap.fr (directory listings and .md5 only).
+name: osmfr-check
+on: workflow_dispatch
+permissions: {}
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - run: |
+          UA="GameGIS-Broker/diagnostic"
+          B=https://download.openstreetmap.fr
+          for d in extracts/europe/germany/ extracts/europe/germany/nordrhein_westfalen/ extracts/europe/germany/hessen/ extracts/africa/ extracts/europe/spain/ extracts/europe/ polygons/europe/germany/; do
+            echo "== $d"
+            curl -sS -A "$UA" --max-time 30 "$B/$d" | grep -oE 'href="[^"?/][^"]*"' | sed 's/href=//; s/"//g' | grep -viE '\.(state\.txt)$' | tr '\n' ' ' | cut -c1-3000; echo
+            sleep 1
+          done
+          for f in extracts/europe/germany/thueringen-latest.osm.pbf.md5 extracts/europe/ukraine-latest.osm.pbf.md5; do
+            echo "== $f"; curl -sS -A "$UA" --max-time 30 -w "  [http %{http_code}]\n" "$B/$f" | head -3; sleep 1
+          done
+          echo "== HEAD thueringen pbf"; curl -sS -I -A "$UA" --max-time 30 "$B/extracts/europe/germany/thueringen-latest.osm.pbf" | grep -iE "^(HTTP|content-length|last-modified|location)" || true
