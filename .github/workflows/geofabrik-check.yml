@@ -23,5 +23,16 @@ jobs:
           [ -n "$LOC" ] && { getent hosts "$(echo "$LOC" | sed -E 's#https?://([^/]+)/.*#\1#')" || echo "DNS of target failed"; curl -sS -I -A "$UA" --max-time 30 -o /dev/null -w "target http %{http_code} ip %{remote_ip} connect %{time_connect}s\n" "$LOC" || echo "target curl exit $?"; }
           echo "== node fetch"
           node -e "fetch('https://download.geofabrik.de/europe/germany/thueringen-latest.osm.pbf',{method:'HEAD',headers:{'User-Agent':'$UA'}}).then(r=>console.log('node',r.status,r.url)).catch(e=>console.log('node error',e.message,e.cause?.code,e.cause?.message))"
+          echo "== node fetch .md5 with different User-Agents"
+          cat > /tmp/ua.mjs <<'JS'
+          const url = 'https://download.geofabrik.de/europe/germany/thueringen-latest.osm.pbf.md5';
+          for (const ua of ['GameGIS-Broker/0.1 extract-download', 'GameGIS-Broker/diagnostic', null]) {
+            try { const r = await fetch(url, ua ? {headers: {'user-agent': ua}} : {}); console.log(JSON.stringify(ua), r.status, (await r.text()).slice(0, 12)); }
+            catch (e) { console.log(JSON.stringify(ua), 'ERROR', e.message, e.cause?.code, e.cause?.message); }
+          }
+          JS
+          node /tmp/ua.mjs
+          echo "== curl with the build User-Agent"
+          curl -sS -A "GameGIS-Broker/0.1 extract-download" --max-time 30 -o /dev/null -w "http %{http_code}\n" https://download.geofabrik.de/europe/germany/thueringen-latest.osm.pbf.md5 || echo "curl exit $?"
           echo "== verbose md5"
           curl -sS -v -A "$UA" --max-time 30 https://download.geofabrik.de/europe/germany/thueringen-latest.osm.pbf.md5 2>&1 | grep -E "^\*|^< HTTP|^[0-9a-f]{32}" | head -30 || true
