@@ -35,12 +35,12 @@ export function idleAbort(idleMs = 120000) {
 }
 
 /** Streams a source file into `target` (via .part), counting bytes in the journal; returns the byte count. */
-async function download(ledger, id, url, target, {fetchImpl, log, idleMs}) {
+async function download(ledger, id, url, target, {fetchImpl, log, idleMs, sleep}) {
   const part = target + '.part', idle = idleAbort(idleMs);
   log(`Downloading ${url} (${LIMITS[id].label})`);
   let got = 0;
   try {
-    const res = await politeFetch(ledger, id, url, {fetchImpl, signal: idle.signal});
+    const res = await politeFetch(ledger, id, url, {fetchImpl, signal: idle.signal, ...(sleep ? {sleep} : {})});
     if (res.status === 404) { await res.body?.cancel?.().catch(() => {}); throw Object.assign(new Error('HTTP 404'), {missing: true}); }
     if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
     const total = Number(res.headers.get('content-length')) || 0;
@@ -83,24 +83,25 @@ function verifyPbfReadable(path) {
 }
 
 /** Asks one source for the region; returns {source, bytes} or throws (SourceUnavailable / missing). */
-async function fromSource(id, region, {ledger, dir, fetchImpl, log, now, idleMs, cachedMd5}) {
+async function fromSource(id, region, {ledger, dir, fetchImpl, log, now, idleMs, cachedMd5, sleep}) {
+  const o = {fetchImpl, ...(sleep ? {sleep} : {})};
   const key = `${id}:${region}`, name = lastPart(region);
   if (ledger.isMissing(key)) throw Object.assign(new Error(`${LIMITS[id].label} has no ${region} (remembered)`), {missing: true});
   const paths = SOURCE_PATHS[id](region);
   let expected = null;
   if (paths.md5) {
-    const {res, text} = await politeText(ledger, id, paths.md5, {fetchImpl});
+    const {res, text} = await politeText(ledger, id, paths.md5, o);
     if (res.status === 404) { ledger.markMissing(key); throw Object.assign(new Error(`${LIMITS[id].label} has no ${region}`), {missing: true}); }
     if (!res.ok || !(expected = md5From(text))) throw new Error(`${LIMITS[id].label}: no valid MD5 for ${region} (HTTP ${res.status})`);
     if (cachedMd5 && cachedMd5 === expected) return {source: id, bytes: 0, unchanged: true, md5: expected};
   }
   // boundary first (small): no boundary, no extract — they must come from the same source
-  const {res: pres, text: polyText} = await politeText(ledger, id, paths.poly, {fetchImpl});
+  const {res: pres, text: polyText} = await politeText(ledger, id, paths.poly, o);
   if (pres.status === 404) { ledger.markMissing(key); throw Object.assign(new Error(`${LIMITS[id].label} has no boundary for ${region}`), {missing: true}); }
   if (!pres.ok || !/^\S/.test(polyText) || !/END\s*$/.test(polyText.trim())) throw new Error(`${LIMITS[id].label}: invalid boundary for ${region}`);
   const target = join(dir, `${name}-latest.osm.pbf`);
   let dl;
-  try { dl = await download(ledger, id, paths.pbf, target, {fetchImpl, log, idleMs}); }
+  try { dl = await download(ledger, id, paths.pbf, target, {fetchImpl, log, idleMs, sleep}); }
   catch (e) { if (e.missing) ledger.markMissing(key); throw e; }
   const actual = await md5Of(dl.part);
   if (expected && actual !== expected) { rmSync(dl.part, {force: true}); throw new Error(`MD5 mismatch for ${region} from ${LIMITS[id].label}`); }
@@ -111,12 +112,18 @@ async function fromSource(id, region, {ledger, dir, fetchImpl, log, now, idleMs,
   return {source: id, bytes: dl.bytes, md5: actual, downloadedAt: now().toISOString()};
 }
 
+/** Trial of one source for one region (manual check that a fallback really works; counted in the journal). */
+export async function trySource(id, region, {ledger, dir, fetchImpl = fetch, log = console.log, now = () => new Date()} = {}) {
+  if (!allowedRegionPath(region)) throw new Error(`Refusing region path "${region}"`);
+  return fromSource(id, region, {ledger, dir, fetchImpl, log, now, idleMs: 120000});
+}
+
 /**
  * Ensures data/extracts/<name>-latest.osm.pbf and <name>.poly for one region. Returns
  * {name, source: 'cache'|<source id>, ageDays, note}. Throws when no copy can be had.
  */
 export async function fetchExtract(region, {ledger, dir, fetchImpl = fetch, cacheDays = 0, log = console.log, warn = m => console.log(`::warning::${m}`),
-  now = () => new Date(), idleMs = 120000} = {}) {
+  now = () => new Date(), idleMs = 120000, sleep = undefined} = {}) {
   if (!allowedRegionPath(region)) throw new Error(`Refusing region path "${region}" (never a continent or an invalid path)`);
   const name = lastPart(region), target = join(dir, `${name}-latest.osm.pbf`), polyPath = join(dir, `${name}.poly`);
   const fileKey = `extract:${region}`, entry = ledger.file(fileKey) ?? {};
@@ -132,7 +139,7 @@ export async function fetchExtract(region, {ledger, dir, fetchImpl = fetch, cach
   const errors = [];
   try {
     const cachedMd5 = have ? (entry.md5 ?? await md5Of(target)) : null;
-    const r = await fromSource('geofabrik', region, {ledger, dir, fetchImpl, log, now, idleMs, cachedMd5: entry.source && entry.source !== 'geofabrik' ? null : cachedMd5});
+    const r = await fromSource('geofabrik', region, {ledger, dir, fetchImpl, log, now, idleMs, sleep, cachedMd5: entry.source && entry.source !== 'geofabrik' ? null : cachedMd5});
     ledger.setFile(fileKey, {checkedOn: today, source: 'geofabrik', md5: r.md5,
       ...(r.unchanged ? {downloadedAt: entry.downloadedAt ?? new Date(statSync(target).mtime).toISOString()} : {downloadedAt: r.downloadedAt})});
     if (r.unchanged) { log(`OK: ${name} unchanged at Geofabrik (MD5 check only)`); return {name, source: 'cache', ageDays, note: 'unchanged'}; }
@@ -142,7 +149,7 @@ export async function fetchExtract(region, {ledger, dir, fetchImpl = fetch, cach
   if (have && ageDays <= FALLBACK_CACHE_DAYS) return useCache('Geofabrik unavailable');
   for (const id of FALLBACK_ORDER) {
     try {
-      const r = await fromSource(id, region, {ledger, dir, fetchImpl, log, now, idleMs});
+      const r = await fromSource(id, region, {ledger, dir, fetchImpl, log, now, idleMs, sleep});
       ledger.setFile(fileKey, {checkedOn: today, source: id, md5: r.md5, downloadedAt: r.downloadedAt});
       warn(`${name} taken from ${LIMITS[id].label} (Geofabrik unavailable)`);
       return {name, source: id, ageDays: 0};

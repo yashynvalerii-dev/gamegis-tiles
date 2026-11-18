@@ -57,10 +57,15 @@ const fpOf = ({def, kind}, o) => regionFingerprint(def, {kind, bundleZoom: o.bun
 
 /** Exports one region (base or precise layer) from its local extract. Returns {part, stat}. */
 function buildRegion({def: r, kind}, o, log) {
-  const name = lastPart(r.extract);
-  const pbf = join(o.extractsDir, `${name}-latest.osm.pbf`);
+  let name = lastPart(r.extract), source = 'extract';
+  let pbf = join(o.extractsDir, `${name}-latest.osm.pbf`);
+  // A new requested area may have only the Overpass core of its area (no regional extract was available).
+  if (!existsSync(pbf) && kind === 'base' && existsSync(join(o.extractsDir, `ovp-${r.id}-latest.osm.pbf`))) {
+    name = `ovp-${r.id}`; pbf = join(o.extractsDir, `${name}-latest.osm.pbf`); source = 'overpass-core';
+  }
   if (!existsSync(pbf)) {
     if (kind === 'precise') { log(`WARNING precise ${r.id}: extract ${name} missing, skipped`); return null; }
+    if (r.addedOn) { log(`::warning::${r.id}: no data source available this time, area skipped`); return null; }
     throw new Error(`Extract for ${r.id} not found: ${pbf}`);
   }
   const extractPoly = join(o.extractsDir, `${name}.poly`);
@@ -90,7 +95,7 @@ function buildRegion({def: r, kind}, o, log) {
     `INCOMPLETE ${stats.tiles.INCOMPLETE} ${JSON.stringify(stats.incompleteReasons)} (${((Date.now() - t) / 1000).toFixed(0)} s)`);
   const kindName = r.addedOn ? 'requested' : 'pinned';
   return {part: {id: r.id, name: r.name, manifest, kind: kindName, circle: r.publish?.circle ?? null},
-    stat: {id: r.id, kind: kindName, seconds: (Date.now() - t) / 1000, ...stats, loadStats: model.stats,
+    stat: {id: r.id, kind: kindName, source, seconds: (Date.now() - t) / 1000, ...stats, loadStats: model.stats,
       fingerprint: fpOf({def: r, kind}, o), bundleKeys: Object.keys(manifest.bundles)}};
 }
 
