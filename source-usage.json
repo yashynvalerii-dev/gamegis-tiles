@@ -14,8 +14,8 @@
     "geo2day": {
       "days": {
         "2026-11-18": {
-          "requests": 3,
-          "bytes": 24570905
+          "requests": 6,
+          "bytes": 49141810
         }
       },
       "pausedUntil": null,
