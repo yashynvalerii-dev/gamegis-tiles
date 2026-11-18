@@ -4,7 +4,7 @@
 name: build-tiles
 on:
   schedule:
-    - cron: '17 3 * * 1'   # Mondays 03:17 UTC
+    - cron: '17 3 * * 1'   # Mondays 03:17 UTC; the gate job lets only even ISO weeks through (every 2 weeks, owner 2026-11-18)
   workflow_dispatch:
     inputs:
       accept:
@@ -37,7 +37,22 @@ concurrency:
   group: pages
   cancel-in-progress: false
 jobs:
+  # Scheduled full builds every second week only (owner 2026-11-18: fewer downloads from Geofabrik). Games accept older
+  # data (Radar Fox b0042 has no age limit). Manual, push and request-driven builds always run.
+  gate:
+    runs-on: ubuntu-24.04
+    outputs:
+      run: ${{ steps.week.outputs.run }}
+    steps:
+      - id: week
+        run: |
+          W=$(date -u +%V)
+          if [ "${{ github.event_name }}" = "schedule" ] && [ $((10#$W % 2)) -eq 1 ]; then
+            echo "ISO week $W is odd: scheduled build skipped (every second week)"; echo "run=false" >> "$GITHUB_OUTPUT"
+          else echo "run=true" >> "$GITHUB_OUTPUT"; fi
   build:
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
     env:
       HAS_CLOUDFLARE: ${{ secrets.CLOUDFLARE_API_TOKEN != '' }}
       TILES_SITE_URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/
