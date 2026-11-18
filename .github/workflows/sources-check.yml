@@ -1,4 +1,4 @@
-# Manual diagnostic: what alternative OSM sources offer for our regions (directory listings / status pages only).
+# Manual diagnostic: what alternative OSM sources offer for our regions (listings, headers, checksums only).
 name: sources-check
 on: workflow_dispatch
 permissions: {}
@@ -8,12 +8,16 @@ jobs:
     timeout-minutes: 5
     steps:
       - run: |
-          UA="GameGIS-Broker/0.1 sources-check"
-          get() { echo "== $1"; curl -sSL -A "$UA" --max-time 30 "$1" -w "\n[http %{http_code}]\n" | sed 's/<[^>]*>/ /g' | tr -s ' \n' | grep -iE "$2|\[http" | head -${3:-15}; sleep 2; }
-          get https://osm.download.movisda.io/ "germany|deutschland|th(ue|ü)ringen|hessen|europe|http" 20
-          get https://osm.download.movisda.io/europe/germany/ "th(ue|ü)ringen|hessen|sachsen|nordrhein|pbf|http" 25
-          get https://geo2day.com/ "germany|europe|th(ue|ü)ringen|pbf|http" 20
-          get https://geo2day.com/europe/germany.html "th(ue|ü)ringen|hessen|sachsen|pbf|http" 25
-          get https://download.openstreetmap.fr/extracts/africa/spain/ "canar|pbf|http" 10
-          get https://ovp.dresel.systems/api/status "slot|rate|connected|http" 10
-          get https://overpass.private.coffee/api/status "slot|rate|connected|http" 10
+          UA="GameGIS-Broker/0.1 (+https://github.com/yashynvalerii-dev/gamegis-tiles)"
+          echo "== movisda home (usage notes)"
+          curl -sS -A "$UA" --max-time 30 https://osm.download.movisda.io/ | sed 's/<[^>]*>/ /g' | tr -s ' \n' | head -c 4000; echo; sleep 2
+          for u in europe/germany/thueringen-latest.osm.pbf europe/germany/thueringen-latest.osm.pbf.md5 europe/germany/thueringen.poly admin/DE-TH-latest.osm.pbf.md5 admin/DE-TH-latest.poly; do
+            echo "== movisda HEAD $u"; curl -sSI -A "$UA" --max-time 30 "https://osm.download.movisda.io/$u" | grep -iE "^(HTTP|location|content-length|last-modified|etag|content-type)" ; sleep 2
+          done
+          echo "== geo2day germany links"
+          curl -sS -A "$UA" --max-time 30 https://geo2day.com/europe/germany.html | grep -oE 'href="[^"]*(thueringen|thuringia|hessen|nordrhein)[^"]*"' | sort -u | head; sleep 2
+          echo "== geo2day thueringen text"
+          curl -sS -A "$UA" --max-time 30 https://geo2day.com/europe/germany.html | sed 's/<[^>]*>/ /g' | tr -s ' \n' | grep -oiE "Th(ue|ü)ringen[^]]*\][^)]*\)[^[]*\[[^]]*\]" | head -3; sleep 2
+          for u in europe/germany/thueringen.pbf europe/germany/thueringen.poly europe/germany/thueringen.pbf.md5; do
+            echo "== geo2day HEAD $u"; curl -sSI -A "$UA" --max-time 30 "https://geo2day.com/$u" | grep -iE "^(HTTP|location|content-length|last-modified|etag|content-type)"; sleep 2
+          done
