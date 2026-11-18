@@ -38,7 +38,7 @@ jobs:
           TILES_SITE_URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/
         run: |
           mkdir -p data
-          node tools/processRequests.js --config regions.json --out requested-regions.json --index-cache data/geofabrik-index.json
+          node tools/processRequests.js --config regions.json --out requested-regions.json --index-cache data/geofabrik-index.json --ledger source-usage.json
       - name: Keep the fresh index copy (at most once a day)
         id: idxday
         run: echo "day=$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
@@ -48,13 +48,13 @@ jobs:
           path: data/geofabrik-index.json
           key: geofabrik-index-${{ steps.idxday.outputs.day }}
       - name: Commit new regions / pinned usage (observation only, never rebuilds by itself)
-        if: steps.plan.outputs.changed == 'true' || steps.plan.outputs.usage_changed == 'true'
+        if: always() && steps.plan.outcome != 'skipped'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          for f in requested-regions.json pinned-usage.json; do if [ -f "$f" ]; then git add "$f"; fi; done
+          for f in requested-regions.json pinned-usage.json source-usage.json; do if [ -f "$f" ]; then git add "$f"; fi; done
           git diff --cached --quiet && exit 0
-          git commit -qm "regions: requested regions / pinned usage"
+          git commit -qm "regions: requested regions / pinned usage / source journal"
           # main may have moved while planning (another commit): rebase onto it and retry
           for i in 1 2 3; do git pull -q --rebase origin main && git push -q && exit 0; sleep 5; done
           exit 1

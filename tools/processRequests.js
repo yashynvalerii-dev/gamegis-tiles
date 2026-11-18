@@ -11,6 +11,7 @@ import {readFileSync, writeFileSync, existsSync, appendFileSync} from 'node:fs';
 import {resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {readRequests, planDemand, planPrecise, planPinnedUsage} from '../src/requests/regionRequests.js';
+import {openLedger, politeText} from '../src/sources/politeSources.js';
 import {tileFor} from '../src/client/gamegis-client.js';
 
 const pick = (o, keys) => Object.fromEntries(keys.filter(k => Number.isFinite(o[k])).map(k => [k, o[k]]));
@@ -21,7 +22,7 @@ const UA = {'user-agent': 'GameGIS-Broker/0.1 region-requests'};
  * REQUESTS_CSV_URL secret of the tiles repository, never from the public regions.json.
  */
 export async function processRequests({configPath = 'regions.json', outPath = 'requested-regions.json', usagePath = 'pinned-usage.json', fetchImpl = fetch,
-  indexCachePath = null,
+  indexCachePath = null, ledgerPath = null, sleep = undefined,
   now = new Date(), csvUrl = process.env.REQUESTS_CSV_URL, siteUrl = process.env.TILES_SITE_URL,
   apps = (process.env.REQUESTS_APPS ?? '').split(',').map(x => x.trim()).filter(Boolean)} = {}) {
   const config = JSON.parse(readFileSync(configPath, 'utf8'));
@@ -51,16 +52,25 @@ export async function processRequests({configPath = 'regions.json', outPath = 'r
 
   // Geofabrik sometimes refuses build machines (2026-11-16): fall back to the last saved copy of its index
   // (region outlines change rarely), so planning does not stop and does not hammer the server.
+  // Polite (owner 2026-11-18): the index is fetched at most once a day, counted in the source journal.
+  const ledger = openLedger(ledgerPath, {now: () => now});
+  const today = now.toISOString().slice(0, 10), haveCopy = indexCachePath && existsSync(indexCachePath);
   let index;
   try {
-    const text = await (await get('https://download.geofabrik.de/index-v1.json', 'Geofabrik index')).text();
-    index = JSON.parse(text);
-    if (indexCachePath) writeFileSync(indexCachePath, text);
+    if (haveCopy && ledger.file('geofabrik:index-v1.json')?.checkedOn === today) {
+      index = JSON.parse(readFileSync(indexCachePath, 'utf8'));
+    } else {
+      const {res, text} = await politeText(ledger, 'geofabrik', 'https://download.geofabrik.de/index-v1.json', {fetchImpl, ...(sleep ? {sleep} : {})});
+      if (!res.ok) throw new Error(`Geofabrik index unavailable: HTTP ${res.status}`);
+      index = JSON.parse(text);
+      ledger.setFile('geofabrik:index-v1.json', {checkedOn: today});
+      if (indexCachePath) writeFileSync(indexCachePath, text);
+    }
   } catch (e) {
-    if (!indexCachePath || !existsSync(indexCachePath)) throw e;
-    console.log(`::warning::Geofabrik index unavailable (${e.message}${e.cause?.code ? ' ' + e.cause.code : ''}); using the saved copy`);
+    if (!haveCopy) throw e;
+    console.log(`::warning::Geofabrik index unavailable (${e.message}); using the saved copy`);
     index = JSON.parse(readFileSync(indexCachePath, 'utf8'));
-  }
+  } finally { ledger.save(); }
   const {regions, changes, pinnedRequests} = planDemand(requests, config.regions, requested.regions, index, {
     maxNewPerRun: s.maxNewPerRun ?? 2, maxTotalRegions: s.maxTotalRegions ?? 15, budgetMB: s.budgetMB ?? 700,
     sizesMB, pinnedMB, isPublished, now, ...pick(s, ['windowDays', 'activityDays', 'minRadiusKm', 'maxRadiusKm', 'marginKm', 'reachKm'])});
@@ -85,7 +95,7 @@ export async function processRequests({configPath = 'regions.json', outPath = 'r
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const a = process.argv.slice(2), opt = k => { const i = a.indexOf(k); return i >= 0 ? a[i + 1] : undefined; };
-  processRequests({configPath: opt('--config') ?? 'regions.json', outPath: opt('--out') ?? 'requested-regions.json', indexCachePath: opt('--index-cache') ?? null}).then(r => {
+  processRequests({configPath: opt('--config') ?? 'regions.json', outPath: opt('--out') ?? 'requested-regions.json', indexCachePath: opt('--index-cache') ?? null, ledgerPath: opt('--ledger') ?? null}).then(r => {
     console.log(JSON.stringify(r, null, 2));
     console.log(`::notice::requests ${r.requests ?? 0}, rejected ${r.rejected ?? 0}, added ${(r.added ?? []).length}, resized ${(r.resized ?? []).length}, changed ${r.changed}${r.configured === false ? ' (not configured)' : ''}`);
     if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `changed=${r.changed}\nusage_changed=${Boolean(r.usageChanged)}\n`);
