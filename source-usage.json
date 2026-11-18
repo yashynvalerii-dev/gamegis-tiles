@@ -1,0 +1,38 @@
+{
+  "note": "Requests and bytes GameGIS Broker took from each OSM data source (polite-use journal, owner 2026-11-18).",
+  "sources": {},
+  "files": {},
+  "missing": {},
+  "limits": {
+    "geofabrik": {
+      "host": "download.geofabrik.de",
+      "weekBytes": 3221225472,
+      "dayRequests": 60,
+      "label": "Geofabrik"
+    },
+    "movisda": {
+      "host": "osm.download.movisda.io",
+      "weekBytes": 1073741824,
+      "dayRequests": 30,
+      "label": "Movisda"
+    },
+    "geo2day": {
+      "host": "geo2day.com",
+      "weekBytes": 1073741824,
+      "dayRequests": 30,
+      "label": "geo2day"
+    },
+    "osmfr": {
+      "host": "download.openstreetmap.fr",
+      "weekBytes": 536870912,
+      "dayRequests": 30,
+      "label": "openstreetmap.fr"
+    },
+    "overpass-eu": {
+      "host": "ovp.dresel.systems",
+      "dayBytes": 52428800,
+      "dayRequests": 20,
+      "label": "Overpass Europe (dresel.systems)"
+    }
+  }
+}
