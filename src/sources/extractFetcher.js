@@ -17,7 +17,7 @@ import {join} from 'node:path';
 import {Readable} from 'node:stream';
 import {pipeline} from 'node:stream/promises';
 import {politeFetch, politeText, SourceUnavailable, SOURCE_PATHS, FALLBACK_ORDER, allowedRegionPath, LIMITS} from './politeSources.js';
-import {scanPbf} from '../providers/pbfReader.js';
+import {scanPbf, readPbfBlobs, decodeHeader} from '../providers/pbfReader.js';
 
 const DAY = 86400000;
 export const FALLBACK_CACHE_DAYS = 30;
@@ -61,6 +61,18 @@ async function download(ledger, id, url, target, {fetchImpl, log, idleMs}) {
     throw e;
   } finally { idle.done(); ledger.count(id, {bytes: got}); }
   return {part, bytes: got};
+}
+
+/** Date of the OSM data in a PBF (its header), read from the first block only; null when unknown. */
+export function pbfDataTime(path) {
+  try {
+    for (const {type, data} of readPbfBlobs(path)) {
+      if (type !== 'OSMHeader') return null;
+      const ts = decodeHeader(data).replicationTimestamp;
+      return Number.isSafeInteger(ts) && ts > 0 ? new Date(ts * 1000) : null;
+    }
+  } catch { return null; }
+  return null;
 }
 
 /** A PBF without a published MD5 (Movisda) must at least read completely (every block decompresses and parses). */
@@ -109,7 +121,8 @@ export async function fetchExtract(region, {ledger, dir, fetchImpl = fetch, cach
   const name = lastPart(region), target = join(dir, `${name}-latest.osm.pbf`), polyPath = join(dir, `${name}.poly`);
   const fileKey = `extract:${region}`, entry = ledger.file(fileKey) ?? {};
   const have = existsSync(target) && existsSync(polyPath);
-  const ageDays = have ? (now() - new Date(entry.downloadedAt ?? statSync(target).mtime)) / DAY : Infinity;
+  // Age of OUR COPY = age of its OSM data (file dates change when the build cache is restored).
+  const ageDays = have ? (now() - (pbfDataTime(target) ?? new Date(entry.downloadedAt ?? statSync(target).mtime))) / DAY : Infinity;
   const today = now().toISOString().slice(0, 10);
   const useCache = (note) => { log(`OK: ${name} from our copy (${ageDays.toFixed(1)} days old; ${note}; no request)`); return {name, source: 'cache', ageDays, note}; };
 
