@@ -1,6 +1,17 @@
 {
   "note": "Requests and bytes GameGIS Broker took from each OSM data source (polite-use journal, owner 2026-11-18).",
-  "sources": {},
+  "sources": {
+    "movisda": {
+      "days": {
+        "2026-11-18": {
+          "requests": 2,
+          "bytes": 18178377
+        }
+      },
+      "pausedUntil": null,
+      "pauseReason": null
+    }
+  },
   "files": {},
   "missing": {},
   "limits": {
