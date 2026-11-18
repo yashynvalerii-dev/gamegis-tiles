@@ -18,6 +18,7 @@ import {Readable} from 'node:stream';
 import {pipeline} from 'node:stream/promises';
 import {politeFetch, politeText, SourceUnavailable, SOURCE_PATHS, FALLBACK_ORDER, allowedRegionPath, LIMITS} from './politeSources.js';
 import {scanPbf, readPbfBlobs, decodeHeader} from '../providers/pbfReader.js';
+import {stampPbfTimestamp} from '../providers/pbfWriter.js';
 
 const DAY = 86400000;
 export const FALLBACK_CACHE_DAYS = 30;
@@ -38,12 +39,13 @@ export function idleAbort(idleMs = 120000) {
 async function download(ledger, id, url, target, {fetchImpl, log, idleMs, sleep}) {
   const part = target + '.part', idle = idleAbort(idleMs);
   log(`Downloading ${url} (${LIMITS[id].label})`);
-  let got = 0;
+  let got = 0, lastModified = null;
   try {
     const res = await politeFetch(ledger, id, url, {fetchImpl, signal: idle.signal, ...(sleep ? {sleep} : {})});
     if (res.status === 404) { await res.body?.cancel?.().catch(() => {}); throw Object.assign(new Error('HTTP 404'), {missing: true}); }
     if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
     const total = Number(res.headers.get('content-length')) || 0;
+    lastModified = Date.parse(res.headers.get('last-modified') ?? '') || null;
     let shown = 0;
     const counter = new TransformStream({transform(chunk, ctl) {
       got += chunk.byteLength; idle.touch();
@@ -60,7 +62,7 @@ async function download(ledger, id, url, target, {fetchImpl, log, idleMs, sleep}
     }
     throw e;
   } finally { idle.done(); ledger.count(id, {bytes: got}); }
-  return {part, bytes: got};
+  return {part, bytes: got, lastModified};
 }
 
 /** Date of the OSM data in a PBF (its header), read from the first block only; null when unknown. */
@@ -105,6 +107,13 @@ async function fromSource(id, region, {ledger, dir, fetchImpl, log, now, idleMs,
   catch (e) { if (e.missing) ledger.markMissing(key); throw e; }
   const actual = await md5Of(dl.part);
   if (expected && actual !== expected) { rmSync(dl.part, {force: true}); throw new Error(`MD5 mismatch for ${region} from ${LIMITS[id].label}`); }
+  // Some servers (geo2day) write no data time into the file: take the file's Last-Modified (never newer than the data).
+  if (!pbfDataTime(dl.part)) {
+    const t = dl.lastModified ?? now().getTime();
+    try { stampPbfTimestamp(dl.part, Math.floor(t / 1000)); }
+    catch (e) { rmSync(dl.part, {force: true}); throw new Error(`${LIMITS[id].label}: unreadable PBF for ${region}: ${e.message}`); }
+    log(`  ${name}: no data time in the file — stamped ${new Date(t).toISOString()} (${dl.lastModified ? 'Last-Modified' : 'download time'})`);
+  }
   if (!expected) { try { verifyPbfReadable(dl.part); } catch (e) { rmSync(dl.part, {force: true}); throw new Error(`${LIMITS[id].label}: unreadable PBF for ${region}: ${e.message}`); } }
   renameSync(dl.part, target);
   writeFileSync(join(dir, `${name}.poly`), polyText);

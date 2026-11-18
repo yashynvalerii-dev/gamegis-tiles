@@ -4,7 +4,8 @@
  * rest of the pipeline (reader, normalizer, exporter) stays the same.
  */
 import {deflateSync} from 'node:zlib';
-import {writeFileSync} from 'node:fs';
+import {writeFileSync, readFileSync} from 'node:fs';
+import {readPbfBlobs, decodeHeader} from './pbfReader.js';
 
 class W {
   constructor() { this.parts = []; }
@@ -95,3 +96,41 @@ export function buildPbf({nodes = [], ways = [], relations = [], timestamp, bbox
 }
 
 export function writePbf(path, data) { writeFileSync(path, buildPbf(data)); }
+
+/** Byte length of the first block (4-byte length + BlobHeader + Blob) of a PBF buffer. */
+function firstBlockLength(buf) {
+  const hl = buf.readUInt32BE(0), hb = buf.subarray(4, 4 + hl);
+  let pos = 0, dataSize = null;
+  const varint = () => { let v = 0, m = 1, b; do { b = hb[pos++]; v += (b & 127) * m; m *= 128; } while (b & 128); return v; };
+  while (pos < hb.length) {
+    const key = varint(), f = Math.floor(key / 8), w = key % 8;
+    if (f === 3 && w === 0) dataSize = varint();
+    else if (w === 0) varint();
+    else if (w === 2) { const n = varint(); pos += n; }
+    else throw new Error('Unexpected BlobHeader field');
+  }
+  if (dataSize === null) throw new Error('BlobHeader without datasize');
+  return 4 + hl + dataSize;
+}
+
+/**
+ * Writes the OSM data time into a PBF header that has none (some extract servers omit it). Everything after the header
+ * block is kept byte for byte. seconds: the data time (e.g. the server's Last-Modified).
+ */
+export function stampPbfTimestamp(path, seconds) {
+  if (!Number.isSafeInteger(seconds) || seconds <= 0) throw new Error('stampPbfTimestamp: seconds required');
+  const buf = readFileSync(path);
+  const first = readPbfBlobs(path).next().value;
+  if (first?.type !== 'OSMHeader') throw new Error('PBF does not start with OSMHeader');
+  const h = decodeHeader(first.data);
+  const head = new W();
+  if (h.bbox && [h.bbox.west, h.bbox.east, h.bbox.north, h.bbox.south].every(Number.isFinite)) head.bytes(1, new W()
+    .sint(1, Math.round(h.bbox.west * 1e9)).sint(2, Math.round(h.bbox.east * 1e9)).sint(3, Math.round(h.bbox.north * 1e9)).sint(4, Math.round(h.bbox.south * 1e9)).done());
+  for (const f of h.requiredFeatures) head.str(4, f);
+  for (const f of h.optionalFeatures) head.str(5, f);
+  head.str(16, `${h.writingProgram ?? 'unknown'} (+data time stamped by gamegis-broker)`);
+  if (h.source) head.str(17, h.source);
+  head.uint(32, seconds);
+  if (h.replicationBaseUrl) head.str(34, h.replicationBaseUrl);
+  writeFileSync(path, Buffer.concat([block('OSMHeader', head.done()), buf.subarray(firstBlockLength(buf))]));
+}
