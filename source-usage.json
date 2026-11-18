@@ -34,8 +34,8 @@
     "overpass-eu": {
       "days": {
         "2026-11-18": {
-          "requests": 1,
-          "bytes": 10642529
+          "requests": 2,
+          "bytes": 21285058
         }
       },
       "pausedUntil": null,
