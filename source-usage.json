@@ -20,6 +20,16 @@
       },
       "pausedUntil": null,
       "pauseReason": null
+    },
+    "geofabrik": {
+      "days": {
+        "2026-11-18": {
+          "requests": 2,
+          "bytes": 0
+        }
+      },
+      "pausedUntil": "2026-11-18T22:12:16.538Z",
+      "pauseReason": "network ECONNREFUSED"
     }
   },
   "files": {},
