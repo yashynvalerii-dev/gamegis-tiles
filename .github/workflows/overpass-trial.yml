@@ -1,0 +1,31 @@
+# Manual: ONE Overpass Europe query for the core of an area + a local export (nothing published). Counted in the journal.
+name: overpass-trial
+on:
+  workflow_dispatch:
+    inputs:
+      lat: {description: 'centre latitude', required: true}
+      lon: {description: 'centre longitude', required: true}
+      radiusKm: {description: 'area radius in km (the query takes at most 1.5 km + edge margin)', required: true, default: '1.5'}
+permissions:
+  contents: write
+concurrency:
+  group: sources
+  cancel-in-progress: false
+jobs:
+  trial:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+      - run: node tools/tryOverpass.js "${{ inputs.lat }}" "${{ inputs.lon }}" "${{ inputs.radiusKm }}" --ledger source-usage.json
+      - name: Save the source journal
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add source-usage.json; git diff --cached --quiet && exit 0
+          git commit -qm "sources: usage journal (Overpass trial)"
+          for i in 1 2 3; do git pull -q --rebase origin main && git push -q && exit 0; sleep 5; done
