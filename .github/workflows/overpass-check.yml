@@ -1,0 +1,17 @@
+# Manual diagnostic (owner-approved, one request per run): can a build machine get a small area from Overpass?
+name: overpass-check
+on: workflow_dispatch
+permissions: {}
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - run: |
+          echo "runner ip: $(curl -sS --max-time 10 https://api.ipify.org || echo unknown)"
+          # ~200 x 200 m in the centre of Erfurt (public square), same shape as the broker's tile query
+          Q='[out:json][timeout:25];(way["highway"](50.9766,11.0214,50.9784,11.0242);way["building"](50.9766,11.0214,50.9784,11.0242););out body geom;'
+          curl -sS --max-time 40 -A "GameGIS-Broker/0.1 overpass-check" --data-urlencode "data=$Q" \
+            -o /tmp/r.json -w "http %{http_code} bytes %{size_download} time %{time_total}s ip %{remote_ip}\n" \
+            https://overpass-api.de/api/interpreter || echo "curl exit $?"
+          node -e "try{const j=require('/tmp/r.json');const c={};for(const e of j.elements)c[e.type]=(c[e.type]||0)+1;console.log('elements',j.elements.length,JSON.stringify(c),'osm base',j.osm3s?.timestamp_osm_base)}catch(e){console.log('not JSON:',require('fs').readFileSync('/tmp/r.json','utf8').slice(0,300))}"
