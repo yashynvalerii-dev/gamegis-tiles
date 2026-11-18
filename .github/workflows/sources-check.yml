@@ -1,0 +1,19 @@
+# Manual diagnostic: what alternative OSM sources offer for our regions (directory listings / status pages only).
+name: sources-check
+on: workflow_dispatch
+permissions: {}
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - run: |
+          UA="GameGIS-Broker/0.1 sources-check"
+          get() { echo "== $1"; curl -sSL -A "$UA" --max-time 30 "$1" -w "\n[http %{http_code}]\n" | sed 's/<[^>]*>/ /g' | tr -s ' \n' | grep -iE "$2|\[http" | head -${3:-15}; sleep 2; }
+          get https://osm.download.movisda.io/ "germany|deutschland|th(ue|ü)ringen|hessen|europe|http" 20
+          get https://osm.download.movisda.io/europe/germany/ "th(ue|ü)ringen|hessen|sachsen|nordrhein|pbf|http" 25
+          get https://geo2day.com/ "germany|europe|th(ue|ü)ringen|pbf|http" 20
+          get https://geo2day.com/europe/germany.html "th(ue|ü)ringen|hessen|sachsen|pbf|http" 25
+          get https://download.openstreetmap.fr/extracts/africa/spain/ "canar|pbf|http" 10
+          get https://ovp.dresel.systems/api/status "slot|rate|connected|http" 10
+          get https://overpass.private.coffee/api/status "slot|rate|connected|http" 10
