@@ -7,7 +7,7 @@
  *   INCOMPLETE until a regular extract is available again (the next full build rebuilds from the extract);
  * - an answer with a runtime-error remark (timeout, memory) is incomplete and never used.
  */
-import {writeFileSync} from 'node:fs';
+import {writeFileSync, mkdirSync} from 'node:fs';
 import {join} from 'node:path';
 import {politeFetch, LIMITS} from './politeSources.js';
 import {overpassClauses} from '../providers/overpassProvider.js';
@@ -52,6 +52,7 @@ export async function fetchOverpassArea(def, {ledger, dir, fetchImpl = fetch, lo
   const circle = def.publish?.circle;
   if (!circle) throw new Error(`${def.id}: only circle areas can be fetched from Overpass`);
   const box = areaBox(circle), name = `ovp-${def.id}`;
+  mkdirSync(dir, {recursive: true});   // before the query: an answer must never be lost
   log(`Overpass Europe: one query for ${def.id} (core ${Math.min(circle.radiusKm, OVERPASS_MAX_RADIUS_KM)} km)`);
   const res = await politeFetch(ledger, 'overpass-eu', OVERPASS_EU, {fetchImpl, method: 'POST',
     headers: {'content-type': 'application/x-www-form-urlencoded'}, body: new URLSearchParams({data: areaQuery(box)}).toString()});
