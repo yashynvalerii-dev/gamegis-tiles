@@ -14,7 +14,9 @@ import {fileURLToPath} from 'node:url';
 import {gzipSync} from 'node:zlib';
 import {loadRegionModel, exportRegion, circleRegion, mergeManifests, bundleAlignedRegion, mergePreciseLayers} from '../src/export/regionExporter.js';
 import {readPoly} from '../src/providers/polyFile.js';
-import {planIncremental, copyReusedRegions, regionFingerprint} from '../src/export/incremental.js';
+import {planIncremental, copyReusedRegions, regionFingerprint, planFullAreas, copyFullAreas} from '../src/export/incremental.js';
+import {exportFullArea, FULL_VERSION} from '../src/export/fullArea.js';
+import {createHash} from 'node:crypto';
 
 const projectDir = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const EXTRACTS = join(projectDir, 'data', 'extracts');
@@ -50,7 +52,22 @@ function grow(b, km) {
 function loadConfig(o) {
   // Several configs (e.g. regions.json + requested-regions.json) are merged; settings come from the first.
   const configs = (o.configPaths ?? [o.configPath]).filter(p => existsSync(p)).map(p => JSON.parse(readFileSync(p, 'utf8')));
-  return {...configs[0], regions: configs.flatMap(c => c.regions ?? []), precise: configs.flatMap(c => c.precise ?? [])};
+  return {...configs[0], regions: configs.flatMap(c => c.regions ?? []), precise: configs.flatMap(c => c.precise ?? []),
+    full: configs.flatMap(c => c.full ?? [])};
+}
+
+/** Full-map areas (owner 2026-11-19): identity of what a full area file was built from. */
+export const fullFingerprint = def => createHash('sha256').update(JSON.stringify({id: def.id, extract: def.extract, bbox: def.bbox, v: FULL_VERSION})).digest('hex').slice(0, 16);
+
+/** Builds one full area from its local extract; a missing extract skips the area with a warning (the site is still built). */
+function buildFull(def, o, log) {
+  const name = lastPart(def.extract), pbf = join(o.extractsDir, `${name}-latest.osm.pbf`), poly = join(o.extractsDir, `${name}.poly`);
+  if (!existsSync(pbf)) { log(`::warning::full area ${def.id}: extract ${name} missing, skipped`); return null; }
+  const t = Date.now();
+  log(`== full area ${def.id} from ${name}`);
+  const e = exportFullArea(def, pbf, {outDir: o.outDir, boundary: existsSync(poly) ? readPoly(poly) : null, onProgress: m => log('  ' + m)});
+  log(`  ${def.id}: ${e.elements.nodes} nodes, ${e.elements.ways} ways, ${e.elements.relations} relations, stored ${mb(e.bytes)} (${((Date.now() - t) / 1000).toFixed(0)} s)`);
+  return {...e, fingerprint: fullFingerprint(def)};
 }
 const defsOf = config => [...config.regions.map(def => ({def, kind: 'base'})), ...config.precise.map(def => ({def, kind: 'precise'}))];
 const fpOf = ({def, kind}, o) => regionFingerprint(def, {kind, bundleZoom: o.bundleZoom, bufferM: 40});
@@ -100,9 +117,11 @@ function buildRegion({def: r, kind}, o, log) {
 }
 
 /** Writes manifest.json + export-report.json for the given parts (config order). */
-function finish(o, config, parts, preciseParts, regionStats, t0, log, extra = {}) {
+function finish(o, config, parts, preciseParts, regionStats, t0, log, extra = {}, fullAreas = []) {
   const manifest = mergeManifests(parts);
   if (preciseParts.length) manifest.precise = mergePreciseLayers(preciseParts);
+  if (fullAreas.length) manifest.fullAreas = {version: FULL_VERSION, format: 'GAMEGIS_FULL_AREA_V1',
+    areas: fullAreas.map(({fingerprint, ...a}) => a)};
   // Public copies of this site, primary first (TILES_SITE_URL comes from the workflow, extra ones from the config).
   const mirrorList = [process.env.TILES_SITE_URL, ...(config.mirrors ?? [])].filter(u => typeof u === 'string' && /^https:\/\/\S+\/$/.test(u));
   if (mirrorList.length) manifest.mirrors = [...new Set(mirrorList)];
@@ -113,7 +132,8 @@ function finish(o, config, parts, preciseParts, regionStats, t0, log, extra = {}
   const bytes = Buffer.from(JSON.stringify(manifest), 'utf8');
   writeFileSync(join(o.outDir, 'manifest.json'), bytes);
   const report = {regions: regionStats, bundles: Object.keys(manifest.bundles).length,
-    storedBytes: regionStats.reduce((a, r) => a + (r.storedBytes ?? 0), 0) + bytes.length, manifestBytes: bytes.length,
+    storedBytes: regionStats.reduce((a, r) => a + (r.storedBytes ?? 0), 0) + fullAreas.reduce((a, f) => a + f.bytes, 0) + bytes.length, manifestBytes: bytes.length,
+    fullAreas: fullAreas.map(f => ({id: f.id, fingerprint: f.fingerprint, bytes: f.bytes, elements: f.elements})),
     manifestGzipBytes: gzipSync(bytes).length, totalSeconds: (Date.now() - t0) / 1000,
     maxRssMB: Math.round(process.resourceUsage().maxRSS / 1024), ...extra};
   writeFileSync(join(o.outDir, 'export-report.json'), JSON.stringify(report, null, 2));
@@ -132,7 +152,8 @@ export function runConfig(o, {log = console.log} = {}) {
     (d.kind === 'precise' ? preciseParts : parts).push(built.part);
     regionStats.push(built.stat);
   }
-  return finish(o, config, parts, preciseParts, regionStats, t0, log, {mode: 'full'});
+  const fullAreas = config.full.map(def => buildFull(def, o, log)).filter(Boolean);
+  return finish(o, config, parts, preciseParts, regionStats, t0, log, {mode: 'full'}, fullAreas);
 }
 
 /** Reads the published manifest + export report (null when unavailable: then everything is rebuilt). */
@@ -151,12 +172,14 @@ export async function runIncremental(o, {log = console.log, fetchImpl = fetch} =
   const defs = defsOf(config);
   const [prevManifest, prevReport] = await published(o.incremental, fetchImpl);
   const plan = planIncremental(defs, prevReport, prevManifest, {bundleZoom: o.bundleZoom, bufferM: 40});
+  const fullPlan = planFullAreas(config.full, prevReport, prevManifest, fullFingerprint);
+  if (config.full.length) log(`Full areas: reuse ${fullPlan.reuse.length}, rebuild ${fullPlan.rebuild.map(d => d.id).join(', ') || '-'}`);
   log(`Incremental plan: reuse ${plan.reuse.length} (${plan.reuse.map(x => x.def.id).join(', ') || '-'}), ` +
     `rebuild ${plan.rebuild.length} (${plan.rebuild.map(x => `${x.def.id}:${x.reason}`).join(', ') || '-'})`);
   if (o.planOut) {
     writeFileSync(o.planOut, JSON.stringify({regions: plan.rebuild.filter(x => x.kind === 'base').map(x => x.def),
-      precise: plan.rebuild.filter(x => x.kind === 'precise').map(x => x.def)}, null, 2) + '\n');
-    if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `rebuild=${plan.rebuild.length}\nreuse=${plan.reuse.length}\n`);
+      precise: plan.rebuild.filter(x => x.kind === 'precise').map(x => x.def), full: fullPlan.rebuild}, null, 2) + '\n');
+    if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `rebuild=${plan.rebuild.length + fullPlan.rebuild.length}\nreuse=${plan.reuse.length}\n`);
     return {reuse: plan.reuse.map(x => x.def.id), rebuild: plan.rebuild.map(x => ({id: x.def.id, reason: x.reason}))};
   }
   rmSync(o.outDir, {recursive: true, force: true}); mkdirSync(o.outDir, {recursive: true});
@@ -178,8 +201,10 @@ export async function runIncremental(o, {log = console.log, fetchImpl = fetch} =
     (d.kind === 'precise' ? preciseParts : parts).push(built.part);
     regionStats.push(built.stat);
   }
+  const fullAreas = [...await copyFullAreas(fullPlan.reuse, {baseUrl: o.incremental, outDir: o.outDir, fetchImpl, log}),
+    ...fullPlan.rebuild.map(def => buildFull(def, o, log)).filter(Boolean)];
   return finish(o, config, parts, preciseParts, regionStats, t0, log,
-    {mode: 'incremental', reused: plan.reuse.map(x => x.def.id), rebuilt: plan.rebuild.map(x => ({id: x.def.id, reason: x.reason}))});
+    {mode: 'incremental', reused: plan.reuse.map(x => x.def.id), rebuilt: plan.rebuild.map(x => ({id: x.def.id, reason: x.reason}))}, fullAreas);
 }
 
 export function runExport(o, {log = console.log} = {}) {

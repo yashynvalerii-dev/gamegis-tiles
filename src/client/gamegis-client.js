@@ -22,7 +22,7 @@
  *
  * Map data © OpenStreetMap contributors (ODbL). Applications must show this attribution.
  */
-export const CLIENT_VERSION = '1.7.0'; // 1.1: request endpoint v1, precise layers, manifest mirrors; 1.2: shared nodes, groups, tileStatusAt, splitBbox; 1.3: POI group; 1.4: majorRoads, waterways; 1.5: activity everywhere the site has data; 1.6: sized requests (~1 km + needM); 1.7: transport, sidewalkStreets, landUse, occupants (V8)
+export const CLIENT_VERSION = '1.8.0'; // 1.1: request endpoint v1, precise layers, manifest mirrors; 1.2: shared nodes, groups, tileStatusAt, splitBbox; 1.3: POI group; 1.4: majorRoads, waterways; 1.5: activity everywhere the site has data; 1.6: sized requests (~1 km + needM); 1.7: transport, sidewalkStreets, landUse, occupants (V8); 1.8: full-map areas (getFullArea)
 /**
  * poiKind vocabulary of POI layer v1 (manifest.poiLayer.version). Stable: values are only ever ADDED, never renamed or
  * removed — skip a kind you do not know instead of failing.
@@ -239,6 +239,51 @@ export function createTileClient({mirrors, fetchImpl = globalThis.fetch, timeout
    * One bundle by key "z/x/y", or null when the area has not been prepared. precision 6/7 uses the precise layer
    * when that bundle exists there, otherwise the base layer (5 decimals); bundle.precision tells which one came.
    */
+  /** A site file by path, checked against its SHA-256; from the local cache when possible, else mirror by mirror. */
+  async function fetchVerified(path, sha256, failure, logEntry) {
+    const cache = await openCache();
+    const cacheKey = `https://gamegis.cache/${sha256}`;
+    let bytes = null;
+    if (cache) {
+      try { const hit = await cache.match(cacheKey); if (hit) bytes = new Uint8Array(await hit.arrayBuffer()); } catch {}
+    }
+    if (bytes && (await sha256Hex(bytes)) !== sha256) bytes = null;
+    const errors = [];
+    if (!bytes) for (const base of known) {
+      try {
+        const res = await timedFetch(joinUrl(base, path));
+        if (!res.ok) { errors.push(`${base}: HTTP ${res.status}`); continue; }
+        const got = new Uint8Array(await res.arrayBuffer());
+        if ((await sha256Hex(got)) !== sha256) { errors.push(`${base}: checksum mismatch`); continue; }
+        bytes = got;
+        log.push({...logEntry, mirror: base, bytes: got.length});
+        if (cache) { try { await cache.put(cacheKey, new Response(got)); } catch {} }
+        break;
+      } catch (e) { errors.push(`${base}: ${e.name === 'AbortError' ? 'timeout' : e.message}`); }
+    }
+    if (!bytes) throw new Error(`${failure}: ${errors.join('; ')}`);
+    return bytes;
+  }
+
+  /**
+   * Full-map areas (1.8): every OSM object of an ordered area, all tags, whole geometry, OSM type/id
+   * (Overpass "out body geom" shape). fullAreas() lists them; getFullArea(id) or getFullArea({lat, lon}) loads one:
+   * {format, id, bbox, dataTimestamp, license, elements}. Returns null when no such area is published.
+   */
+  async function fullAreas() { return (await getManifest()).fullAreas?.areas ?? []; }
+  async function getFullArea(which) {
+    const list = await fullAreas();
+    const e = typeof which === 'string' ? list.find(a => a.id === which)
+      : list.find(a => which && which.lat >= a.bbox.south && which.lat <= a.bbox.north && which.lon >= a.bbox.west && which.lon <= a.bbox.east);
+    if (!e) return null;
+    const memKey = `full:${e.id}:${e.sha256}`;
+    if (memory.has(memKey)) return memory.get(memKey);
+    const bytes = await fetchVerified(e.path, e.sha256, `FULL_AREA_UNAVAILABLE ${e.id}`, {event: 'full-area', id: e.id});
+    const area = JSON.parse(await gunzip(bytes));
+    memory.set(memKey, area);
+    return area;
+  }
+
   async function getBundle(key, precision = 5) {
     const m = await getManifest();
     const layer = precision > 5 ? m.precise?.[precision] : null;
@@ -249,27 +294,7 @@ export function createTileClient({mirrors, fetchImpl = globalThis.fetch, timeout
     if (!entry) return null;
     const [z, x, y] = key.split('/');
     const path = (usePrecise ? layer.bundlePath : m.bundlePath).replace('{z}', z).replace('{x}', x).replace('{y}', y);
-    const cache = await openCache();
-    const cacheKey = `https://gamegis.cache/${entry.sha256}`;
-    let bytes = null;
-    if (cache) {
-      try { const hit = await cache.match(cacheKey); if (hit) bytes = new Uint8Array(await hit.arrayBuffer()); } catch {}
-    }
-    if (bytes && (await sha256Hex(bytes)) !== entry.sha256) bytes = null;
-    const errors = [];
-    if (!bytes) for (const base of known) {
-      try {
-        const res = await timedFetch(joinUrl(base, path));
-        if (!res.ok) { errors.push(`${base}: HTTP ${res.status}`); continue; }
-        const got = new Uint8Array(await res.arrayBuffer());
-        if ((await sha256Hex(got)) !== entry.sha256) { errors.push(`${base}: checksum mismatch`); continue; }
-        bytes = got;
-        log.push({event: 'bundle', key, mirror: base, bytes: got.length});
-        if (cache) { try { await cache.put(cacheKey, new Response(got)); } catch {} }
-        break;
-      } catch (e) { errors.push(`${base}: ${e.name === 'AbortError' ? 'timeout' : e.message}`); }
-    }
-    if (!bytes) throw new Error(`BUNDLE_UNAVAILABLE ${key}: ${errors.join('; ')}`);
+    const bytes = await fetchVerified(path, entry.sha256, `BUNDLE_UNAVAILABLE ${key}`, {event: 'bundle', key});
     const bundle = JSON.parse(m.bundleEncoding === 'gzip' ? await gunzip(bytes) : new TextDecoder().decode(bytes));
     bundle.precision = usePrecise ? precision : 5;
     memory.set(memKey, bundle);
@@ -395,5 +420,5 @@ export function createTileClient({mirrors, fetchImpl = globalThis.fetch, timeout
   }
   const activity = new Map();
 
-  return {getManifest, getBundle, getArea, requestRegion, reportActivity, log, mirrors: () => [...known]};
+  return {getManifest, getBundle, getArea, fullAreas, getFullArea, requestRegion, reportActivity, log, mirrors: () => [...known]};
 }

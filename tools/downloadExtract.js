@@ -44,6 +44,7 @@ export function plan(args) {
         areas.push({id: r.id, extract: r.extract, requested: Boolean(r.addedOn), publish: r.publish});
         if (r.publish?.poly) polys.add(r.publish.poly);
       }
+      for (const f of config.full ?? []) { extracts.add(f.extract); polys.add(f.extract); }   // full-map areas: their region's extract
     } else throw new Error(`Unknown argument ${args[i]}`);
   }
   if (!extracts.size) { extracts.add('europe/germany/thueringen'); polys.add('europe/germany/thueringen'); }

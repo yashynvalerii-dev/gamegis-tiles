@@ -23,7 +23,7 @@ on:
         default: false
   push:
     branches: [main]
-    paths: ['src/**', 'tools/**', 'site-template/**', 'regions.json', 'requested-regions.json', '.github/workflows/build-tiles.yml']
+    paths: ['src/**', 'tools/**', 'site-template/**', 'regions.json', 'requested-regions.json', 'full-areas.json', '.github/workflows/build-tiles.yml']
 permissions:
   contents: write
   pages: write
@@ -90,7 +90,7 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p diag
-          node tools/exportTiles.js --config regions.json --config requested-regions.json --incremental "$TILES_SITE_URL" --plan-out rebuild.json 2>&1 | tee diag/plan.log
+          node tools/exportTiles.js --config regions.json --config requested-regions.json --config full-areas.json --incremental "$TILES_SITE_URL" --plan-out rebuild.json 2>&1 | tee diag/plan.log
       - id: download
         name: Download extracts (MD5 verified) and region boundaries
         run: |
@@ -100,7 +100,7 @@ jobs:
             if [ "${{ steps.plan.outputs.rebuild }}" = "0" ]; then echo "nothing to rebuild" | tee diag/download.log; exit 0; fi
             CFG="--config rebuild.json"
           else
-            CFG="--prune --config regions.json --config requested-regions.json"   # full build: drop unused cached extracts
+            CFG="--prune --config regions.json --config requested-regions.json --config full-areas.json"   # full build: drop unused cached extracts
           fi
           # After a code change the maps are rebuilt from our own copies (<= 14 days old) without asking any source.
           if [ "${{ github.event_name }}" = "push" ]; then CFG="$CFG --cache-days 14"; fi
@@ -123,7 +123,7 @@ jobs:
         run: |
           set -o pipefail
           INCR=""; if [ "${{ steps.mode.outputs.incremental }}" = "true" ]; then INCR="--incremental $TILES_SITE_URL"; fi
-          npm run export-tiles -- --config regions.json --config requested-regions.json --out site $INCR 2>&1 | tee diag/export.log
+          npm run export-tiles -- --config regions.json --config requested-regions.json --config full-areas.json --out site $INCR 2>&1 | tee diag/export.log
       - uses: actions/cache/save@v4
         if: always() && steps.download.outputs.downloaded == 'true'   # keep a fresh download even if a later step fails
         continue-on-error: true

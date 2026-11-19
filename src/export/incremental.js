@@ -106,3 +106,32 @@ function pickBase(m) {
   return {format, datasetId, normalizationVersion, provider, tileZoom, bundleZoom, bufferM, bundleEncoding, license,
     ...(poiLayer ? {poiLayer} : {})};
 }
+
+/**
+ * Full-map areas in incremental builds: reuse a published file when its fingerprint is unchanged (SHA-256 checked),
+ * otherwise it must be rebuilt from the extract. Returns {reuse: [entry], rebuild: [def]}.
+ */
+export function planFullAreas(defs, prevReport, prevManifest, fingerprintOf) {
+  const prevFp = new Map((prevReport?.fullAreas ?? []).map(f => [f.id, f.fingerprint]));
+  const prevEntry = new Map((prevManifest?.fullAreas?.areas ?? []).map(a => [a.id, a]));
+  const reuse = [], rebuild = [];
+  for (const def of defs) {
+    const e = prevEntry.get(def.id);
+    if (e && prevFp.get(def.id) === fingerprintOf(def)) reuse.push({...e, fingerprint: prevFp.get(def.id)}); else rebuild.push(def);
+  }
+  return {reuse, rebuild};
+}
+
+/** Copies reused full-area files from the published site, verifying each SHA-256. */
+export async function copyFullAreas(entries, {baseUrl, outDir, fetchImpl = fetch, log = () => {}} = {}) {
+  for (const e of entries) {
+    const res = await fetchImpl(new URL(e.path, baseUrl).href, {cache: 'no-store'});
+    if (!res.ok) throw new Error(`REUSE_DOWNLOAD_FAILED ${e.path}: HTTP ${res.status}`);
+    const bytes = Buffer.from(await res.arrayBuffer());
+    if (sha256(bytes) !== e.sha256) throw new Error(`REUSE_CHECKSUM_MISMATCH ${e.path}`);
+    mkdirSync(dirname(join(outDir, e.path)), {recursive: true});
+    writeFileSync(join(outDir, e.path), bytes);
+    log(`== full area ${e.id}: unchanged, reused`);
+  }
+  return entries;
+}

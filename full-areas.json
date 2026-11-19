@@ -1,0 +1,12 @@
+{
+  "note": "Full-map areas: every OSM object of the area (all tags, whole geometry, OSM ids), published as full/<id>.json.gz. Approved list; each area at most ~9 km2 and inside its extract.",
+  "full": [
+    {
+      "id": "full-erfurt-johannesplatz",
+      "name": "Erfurt, Johannesplatz (test area 1 x 1 km)",
+      "extract": "europe/germany/thueringen",
+      "bbox": {"south": 50.989, "west": 11.0239, "north": 50.998, "east": 11.0381},
+      "addedOn": "2026-11-19"
+    }
+  ]
+}
