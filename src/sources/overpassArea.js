@@ -14,6 +14,8 @@ import {overpassClauses} from '../providers/overpassProvider.js';
 import {writePbf} from '../providers/pbfWriter.js';
 
 export const OVERPASS_EU = 'https://ovp.dresel.systems/api/interpreter';
+/** The error lines of an Overpass error page (so a rejected query is visible in the log). */
+export const overpassErrorText = html => String(html).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').match(/(Error|error)[^.]{0,200}/)?.[0] ?? '';
 export const OVERPASS_MAX_RADIUS_KM = 1.5;
 const EDGE_MARGIN_KM = 0.8;   // a z15 tile (~0.6 km) + its 40 m buffer at the edge of the circle stays inside the box
 
@@ -58,7 +60,7 @@ export async function fetchOverpassArea(def, {ledger, dir, fetchImpl = fetch, lo
     headers: {'content-type': 'application/x-www-form-urlencoded'}, body: new URLSearchParams({data: areaQuery(box)}).toString()});
   const text = await res.text();
   ledger.count('overpass-eu', {bytes: Buffer.byteLength(text)});
-  if (!res.ok) throw new Error(`${LIMITS['overpass-eu'].label}: HTTP ${res.status}`);
+  if (!res.ok) throw new Error(`${LIMITS['overpass-eu'].label}: HTTP ${res.status} ${overpassErrorText(text)}`);
   const entities = overpassToEntities(JSON.parse(text));
   writePbf(join(dir, `${name}-latest.osm.pbf`), {...entities, bbox: box, program: 'gamegis-broker overpass-eu'});
   writeFileSync(join(dir, `${name}.poly`), polyText(name, box));
@@ -74,7 +76,7 @@ export async function fetchOverpassArea(def, {ledger, dir, fetchImpl = fetch, lo
  */
 export function fullAreaQuery(box) {
   const b = [box.south, box.west, box.north, box.east].join(',');
-  return `[out:json][timeout:25];(node(${b});way(${b}););(._;>;)->.base;(rel(bw.base);rel(bn.base););->.rels;` +
+  return `[out:json][timeout:25];(node(${b});way(${b}););(._;>;)->.base;(rel(bw.base);rel(bn.base);)->.rels;` +
     `rel.rels[type=multipolygon]->.mp;way(r.mp)->.mpw;(.mpw;>;)->.mpall;(.base;.rels;.mpall;);out body qt;`;
 }
 
@@ -90,7 +92,7 @@ export async function fetchOverpassFull(def, {ledger, dir, fetchImpl = fetch, lo
     headers: {'content-type': 'application/x-www-form-urlencoded'}, body: new URLSearchParams({data: fullAreaQuery(box)}).toString()});
   const text = await res.text();
   ledger.count('overpass-eu', {bytes: Buffer.byteLength(text)});
-  if (!res.ok) throw new Error(`${LIMITS['overpass-eu'].label}: HTTP ${res.status}`);
+  if (!res.ok) throw new Error(`${LIMITS['overpass-eu'].label}: HTTP ${res.status} ${overpassErrorText(text)}`);
   const entities = overpassToEntities(JSON.parse(text));
   writePbf(join(dir, `${name}-latest.osm.pbf`), {...entities, bbox: box, program: 'gamegis-broker overpass-eu full'});
   // boundary = the queried box, a hair larger so the box itself counts as completely inside
