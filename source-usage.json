@@ -42,8 +42,8 @@
           "bytes": 21285058
         },
         "2026-11-19": {
-          "requests": 1,
-          "bytes": 907
+          "requests": 2,
+          "bytes": 2676745
         }
       },
       "pausedUntil": null,
