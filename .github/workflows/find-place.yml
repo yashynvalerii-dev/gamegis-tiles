@@ -1,0 +1,35 @@
+# Manual, offline: where do named streets meet, from our cached extract (no request to any source).
+name: find-place
+on:
+  workflow_dispatch:
+    inputs:
+      extract: {description: 'cached extract name, e.g. thueringen', required: true}
+      names: {description: 'street names separated by |', required: true}
+      box: {description: 'search box south,west,north,east', required: true}
+permissions: {}
+jobs:
+  find:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with: {node-version: '24'}
+      - uses: actions/cache/restore@v4
+        with: {path: data/extracts, key: extracts-none, restore-keys: extracts-}
+      - run: |
+          cat > /tmp/find.mjs <<'JS'
+          import {scanPbf} from './src/providers/pbfReader.js';
+          const [ex, names, box] = process.argv.slice(2);
+          const want = new Set(names.split('|')), [s, w, n, e] = box.split(',').map(Number);
+          const ways = [], need = new Set(), pos = new Map();
+          const file = `data/extracts/${ex}-latest.osm.pbf`;
+          scanPbf(file, {way(id, refs, tags) { if (want.has(tags.name) && tags.highway) { ways.push({name: tags.name, refs}); refs.forEach(r => need.add(r)); } }});
+          scanPbf(file, {node(id, lat, lon) { if (need.has(id) && lat >= s && lat <= n && lon >= w && lon <= e) pos.set(id, [lat, lon]); }});
+          const byName = new Map();
+          for (const x of ways) for (const r of x.refs) if (pos.has(r)) (byName.get(x.name) ?? byName.set(x.name, new Set()).get(x.name)).add(r);
+          for (const [k, v] of byName) { const p = [...v].map(r => pos.get(r)); console.log(k, p.length, 'nodes, centre', (p.reduce((a, q) => a + q[0], 0) / p.length).toFixed(5), (p.reduce((a, q) => a + q[1], 0) / p.length).toFixed(5)); }
+          const lists = [...byName.values()];
+          for (let i = 0; i < lists.length; i++) for (let j = i + 1; j < lists.length; j++) for (const r of lists[i]) if (lists[j].has(r)) console.log('junction', [...byName.keys()][i], '/', [...byName.keys()][j], pos.get(r).map(v => v.toFixed(5)).join(','));
+          JS
+          cp /tmp/find.mjs ./find.mjs && node find.mjs "${{ inputs.extract }}" "${{ inputs.names }}" "${{ inputs.box }}"
