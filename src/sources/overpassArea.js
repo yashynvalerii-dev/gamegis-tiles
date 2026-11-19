@@ -66,3 +66,37 @@ export async function fetchOverpassArea(def, {ledger, dir, fetchImpl = fetch, lo
   log(`OK: ${name} from Overpass Europe (${(Buffer.byteLength(text) / 1048576).toFixed(1)} MB, ${elements} elements)`);
   return {bytes: Buffer.byteLength(text), elements};
 }
+
+/**
+ * Query for a FULL-map area (every object): nodes and ways in the box with all their nodes; relations having a member
+ * there are listed; multipolygons (forests, parks, lakes) also get their member ways outside the box so their shape is
+ * complete. Big boundary / route relations are listed without pulling their far-away members.
+ */
+export function fullAreaQuery(box) {
+  const b = [box.south, box.west, box.north, box.east].join(',');
+  return `[out:json][timeout:25];(node(${b});way(${b}););(._;>;)->.base;(rel(bw.base);rel(bn.base););->.rels;` +
+    `rel.rels[type=multipolygon]->.mp;way(r.mp)->.mpw;(.mpw;>;)->.mpall;(.base;.rels;.mpall;);out body qt;`;
+}
+
+/** File names of an Overpass-sourced full area (refresh tag: change it in full-areas.json to fetch again). */
+export const overpassFullName = def => `ovp-full-${def.id}-${String(def.refresh ?? 0).replace(/[^0-9a-z-]/gi, '')}`;
+
+/** One polite query for a full area {id, bbox, source: 'overpass-eu'}; writes <name>-latest.osm.pbf + <name>.poly. */
+export async function fetchOverpassFull(def, {ledger, dir, fetchImpl = fetch, log = console.log} = {}) {
+  const box = def.bbox, name = overpassFullName(def);
+  mkdirSync(dir, {recursive: true});
+  log(`Overpass Europe: one query for full area ${def.id}`);
+  const res = await politeFetch(ledger, 'overpass-eu', OVERPASS_EU, {fetchImpl, method: 'POST',
+    headers: {'content-type': 'application/x-www-form-urlencoded'}, body: new URLSearchParams({data: fullAreaQuery(box)}).toString()});
+  const text = await res.text();
+  ledger.count('overpass-eu', {bytes: Buffer.byteLength(text)});
+  if (!res.ok) throw new Error(`${LIMITS['overpass-eu'].label}: HTTP ${res.status}`);
+  const entities = overpassToEntities(JSON.parse(text));
+  writePbf(join(dir, `${name}-latest.osm.pbf`), {...entities, bbox: box, program: 'gamegis-broker overpass-eu full'});
+  // boundary = the queried box, a hair larger so the box itself counts as completely inside
+  const e = 1e-5;
+  writeFileSync(join(dir, `${name}.poly`), polyText(name, {south: box.south - e, west: box.west - e, north: box.north + e, east: box.east + e}));
+  const elements = entities.nodes.length + entities.ways.length + entities.relations.length;
+  log(`OK: ${name} from Overpass Europe (${(Buffer.byteLength(text) / 1048576).toFixed(1)} MB, ${elements} elements)`);
+  return {bytes: Buffer.byteLength(text), elements, name};
+}

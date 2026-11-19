@@ -16,6 +16,7 @@ import {loadRegionModel, exportRegion, circleRegion, mergeManifests, bundleAlign
 import {readPoly} from '../src/providers/polyFile.js';
 import {planIncremental, copyReusedRegions, regionFingerprint, planFullAreas, copyFullAreas} from '../src/export/incremental.js';
 import {exportFullArea, FULL_VERSION} from '../src/export/fullArea.js';
+import {overpassFullName} from '../src/sources/overpassArea.js';
 import {createHash} from 'node:crypto';
 
 const projectDir = resolve(fileURLToPath(new URL('..', import.meta.url)));
@@ -57,12 +58,14 @@ function loadConfig(o) {
 }
 
 /** Full-map areas (owner 2026-11-19): identity of what a full area file was built from. */
-export const fullFingerprint = def => createHash('sha256').update(JSON.stringify({id: def.id, extract: def.extract, bbox: def.bbox, v: FULL_VERSION})).digest('hex').slice(0, 16);
+export const fullFingerprint = def => createHash('sha256').update(JSON.stringify({id: def.id, extract: def.extract ?? null, source: def.source ?? null,
+  refresh: def.refresh ?? null, bbox: def.bbox, v: FULL_VERSION})).digest('hex').slice(0, 16);
 
 /** Builds one full area from its local extract; a missing extract skips the area with a warning (the site is still built). */
 function buildFull(def, o, log) {
-  const name = lastPart(def.extract), pbf = join(o.extractsDir, `${name}-latest.osm.pbf`), poly = join(o.extractsDir, `${name}.poly`);
-  if (!existsSync(pbf)) { log(`::warning::full area ${def.id}: extract ${name} missing, skipped`); return null; }
+  const name = def.source === 'overpass-eu' ? overpassFullName(def) : lastPart(def.extract);
+  const pbf = join(o.extractsDir, `${name}-latest.osm.pbf`), poly = join(o.extractsDir, `${name}.poly`);
+  if (!existsSync(pbf)) { log(`::warning::full area ${def.id}: data ${name} missing, skipped`); return null; }
   const t = Date.now();
   log(`== full area ${def.id} from ${name}`);
   const e = exportFullArea(def, pbf, {outDir: o.outDir, boundary: existsSync(poly) ? readPoly(poly) : null, onProgress: m => log('  ' + m)});

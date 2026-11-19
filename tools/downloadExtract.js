@@ -17,7 +17,7 @@ import {join, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {openLedger} from '../src/sources/politeSources.js';
 import {fetchExtract, fetchPublishPoly} from '../src/sources/extractFetcher.js';
-import {fetchOverpassArea} from '../src/sources/overpassArea.js';
+import {fetchOverpassArea, fetchOverpassFull, overpassFullName} from '../src/sources/overpassArea.js';
 export {idleAbort} from '../src/sources/extractFetcher.js';
 
 const projectDir = resolve(fileURLToPath(new URL('..', import.meta.url)));
@@ -28,7 +28,7 @@ const lastPart = p => p.split('/').pop();
 export const osmfrPath = region => region.replaceAll('-', '_');
 
 export function plan(args) {
-  const extracts = new Set(), polys = new Set(), areas = [];
+  const extracts = new Set(), polys = new Set(), areas = [], overpassFull = [];
   let prune = false, ledger = null, cacheDays = 0;
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--prune') prune = true;
@@ -44,29 +44,31 @@ export function plan(args) {
         areas.push({id: r.id, extract: r.extract, requested: Boolean(r.addedOn), publish: r.publish});
         if (r.publish?.poly) polys.add(r.publish.poly);
       }
-      for (const f of config.full ?? []) { extracts.add(f.extract); polys.add(f.extract); }   // full-map areas: their region's extract
+      // full-map areas: their region's extract, or (no extract) one stored Overpass query
+      for (const f of config.full ?? []) { if (f.source === 'overpass-eu') overpassFull.push(f); else { extracts.add(f.extract); polys.add(f.extract); } }
     } else throw new Error(`Unknown argument ${args[i]}`);
   }
-  if (!extracts.size) { extracts.add('europe/germany/thueringen'); polys.add('europe/germany/thueringen'); }
+  if (!extracts.size && !overpassFull.length) { extracts.add('europe/germany/thueringen'); polys.add('europe/germany/thueringen'); }
   for (const r of [...extracts, ...polys]) if (!valid(r)) throw new Error(`Invalid region path: ${r}`);
   if (!Number.isFinite(cacheDays) || cacheDays < 0) throw new Error('--cache-days must be a number >= 0');
-  return {extracts: [...extracts], polys: [...polys], prune, ledger, cacheDays, areas};
+  return {extracts: [...extracts], polys: [...polys], prune, ledger, cacheDays, areas, overpassFull};
 }
 
 /** Extract files in dir that no configured region uses (e.g. Germany after Thuringia got its own extract). */
-export function staleExtracts(files, extracts, areaIds = null) {
-  const keep = new Set([...extracts.map(r => `${lastPart(r)}-latest.osm.pbf`), ...(areaIds ?? []).map(id => `ovp-${id}-latest.osm.pbf`)]);
+export function staleExtracts(files, extracts, areaIds = null, keepNames = []) {
+  const keep = new Set([...extracts.map(r => `${lastPart(r)}-latest.osm.pbf`), ...(areaIds ?? []).map(id => `ovp-${id}-latest.osm.pbf`),
+    ...keepNames.map(n => `${n}-latest.osm.pbf`)]);
   return files.filter(f => /\.osm\.pbf(\.part)?$/.test(f) && !keep.has(f) && !(areaIds === null && /^ovp-/.test(f)));
 }
 
 /** Gets everything in the plan; returns a summary per region. Always saves the journal. */
-export async function run({extracts, polys, prune, ledger: ledgerPath, cacheDays, areas = []}, {fetchImpl = fetch, extractsDir = dir, log = console.log,
+export async function run({extracts, polys, prune, ledger: ledgerPath, cacheDays, areas = [], overpassFull = []}, {fetchImpl = fetch, extractsDir = dir, log = console.log,
   warn = m => console.log(`::warning::${m}`), sleep = undefined} = {}) {
   mkdirSync(extractsDir, {recursive: true});
   const ledger = openLedger(ledgerPath);
   const results = [];
   try {
-    if (prune) for (const f of staleExtracts(readdirSync(extractsDir), extracts, areas.map(a => a.id))) { rmSync(join(extractsDir, f), {force: true}); log(`Removed unused extract ${f}`); }
+    if (prune) for (const f of staleExtracts(readdirSync(extractsDir), extracts, areas.map(a => a.id), overpassFull.map(overpassFullName))) { rmSync(join(extractsDir, f), {force: true}); log(`Removed unused extract ${f}`); }
     for (const r of extracts) {
       try { results.push(await fetchExtract(r, {ledger, dir: extractsDir, fetchImpl, cacheDays, log, warn, sleep})); continue; } catch (e) {
         // Only NEW requested areas (circles) may fall back to one Overpass query each; permanent regions fail loudly.
@@ -79,6 +81,13 @@ export async function run({extracts, polys, prune, ledger: ledgerPath, cacheDays
           catch (e2) { warn(`${a.id}: Overpass Europe unavailable too (${e2.message}) — area skipped this time`); results.push({name: a.id, source: 'none'}); }
         }
       }
+    }
+    // Overpass-sourced full areas: fetched once, then kept (no request while the stored copy exists)
+    for (const f of overpassFull) {
+      const name = overpassFullName(f);
+      if (existsSync(join(extractsDir, `${name}-latest.osm.pbf`)) && existsSync(join(extractsDir, `${name}.poly`))) { log(`OK: ${name} from our copy (no request)`); results.push({name, source: 'cache'}); continue; }
+      try { await fetchOverpassFull(f, {ledger, dir: extractsDir, fetchImpl, log}); results.push({name, source: 'overpass-eu'}); }
+      catch (e) { warn(`full area ${f.id}: ${e.message} — skipped this time`); results.push({name, source: 'none'}); }
     }
     const own = new Set(extracts.map(lastPart));
     for (const p of polys) if (!own.has(lastPart(p))) await fetchPublishPoly(p, {ledger, dir: extractsDir, fetchImpl, log});
