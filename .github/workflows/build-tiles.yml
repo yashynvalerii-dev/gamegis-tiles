@@ -106,7 +106,7 @@ jobs:
           if [ "${{ github.event_name }}" = "push" ]; then CFG="$CFG --cache-days 14"; fi
           CFG="$CFG --ledger source-usage.json"
           npm run download-extract -- $CFG 2>&1 | tee diag/download.log
-          if grep -q '^Downloading' diag/download.log; then echo "downloaded=true" >> "$GITHUB_OUTPUT"; fi
+          if grep -qE '^(Downloading|OK: ovp)' diag/download.log; then echo "downloaded=true" >> "$GITHUB_OUTPUT"; fi   # new data (incl. Overpass answers) goes into the cache
           grep -E '^(Sources:|::warning::)' diag/download.log >> "$GITHUB_STEP_SUMMARY" || true
       # The polite-use journal (requests and bytes per source, pauses) is kept openly in the repository.
       - name: Save the source journal
