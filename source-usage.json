@@ -26,6 +26,10 @@
         "2026-11-18": {
           "requests": 2,
           "bytes": 0
+        },
+        "2026-11-19": {
+          "requests": 1,
+          "bytes": 3785270
         }
       },
       "pausedUntil": "2026-11-18T22:12:16.538Z",
@@ -42,7 +46,11 @@
       "pauseReason": null
     }
   },
-  "files": {},
+  "files": {
+    "geofabrik:index-v1.json": {
+      "checkedOn": "2026-11-19"
+    }
+  },
   "missing": {},
   "limits": {
     "geofabrik": {
