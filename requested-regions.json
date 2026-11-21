@@ -16,6 +16,21 @@
       "lastActiveWeek": "2026-W46"
     },
     {
+      "id": "req-52p61_16p58",
+      "name": "Województwo wielkopolskie<br />(Greater Poland Voivodeship) 52.61,16.58",
+      "extract": "europe/poland/wielkopolskie",
+      "publish": {
+        "circle": {
+          "lat": 52.61,
+          "lon": 16.58,
+          "radiusKm": 1.5
+        }
+      },
+      "addedOn": "2026-11-21",
+      "rating": 1,
+      "lastActiveWeek": "2026-W47"
+    },
+    {
       "id": "req-51p30_9p45",
       "name": "Hessen 51.30,9.45",
       "extract": "europe/germany/hessen",
@@ -77,5 +92,5 @@
     }
   ],
   "precise": [],
-  "updatedAt": "2026-11-13T09:48:54.627Z"
+  "updatedAt": "2026-11-21T12:51:26.844Z"
 }
