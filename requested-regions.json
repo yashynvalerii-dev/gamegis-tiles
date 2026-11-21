@@ -21,9 +21,9 @@
       "extract": "europe/poland/wielkopolskie",
       "publish": {
         "circle": {
-          "lat": 52.61,
-          "lon": 16.58,
-          "radiusKm": 1.5
+          "lat": 52.605,
+          "lon": 16.59,
+          "radiusKm": 4
         }
       },
       "addedOn": "2026-11-21",
@@ -92,5 +92,5 @@
     }
   ],
   "precise": [],
-  "updatedAt": "2026-11-21T12:51:26.844Z"
+  "updatedAt": "2026-11-21T19:29:44.135Z"
 }
