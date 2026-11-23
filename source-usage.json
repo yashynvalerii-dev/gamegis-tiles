@@ -50,9 +50,13 @@
         "2026-11-22": {
           "requests": 1,
           "bytes": 3477733
+        },
+        "2026-11-23": {
+          "requests": 2,
+          "bytes": 0
         }
       },
-      "pausedUntil": "2026-11-22T01:29:44.135Z",
+      "pausedUntil": "2026-11-23T07:50:00.615Z",
       "pauseReason": "network ECONNREFUSED"
     },
     "overpass-eu": {
