@@ -58,6 +58,10 @@
         "2026-11-24": {
           "requests": 3,
           "bytes": 3478273
+        },
+        "2026-11-25": {
+          "requests": 1,
+          "bytes": 3478453
         }
       },
       "pausedUntil": "2026-11-24T08:22:13.590Z",
@@ -84,7 +88,7 @@
   },
   "files": {
     "geofabrik:index-v1.json": {
-      "checkedOn": "2026-11-24"
+      "checkedOn": "2026-11-25"
     },
     "extract:europe/poland/wielkopolskie": {
       "checkedOn": "2026-11-21",
